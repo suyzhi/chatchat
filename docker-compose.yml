@@ -1,0 +1,71 @@
+# ==========================================================================
+# Vellum 部署
+#
+# 一条命令起全套：应用 + Caddy（自动申请并续期 HTTPS 证书）。
+#   docker compose up -d
+#
+# 如果你这台机器上已经跑着 Nginx 并想继续用它：
+#   docker compose up -d vellum      # 只起应用，然后把 deploy/nginx.conf 挂进你的 Nginx
+# ==========================================================================
+
+services:
+  vellum:
+    build:
+      context: .
+    image: vellum:latest
+    container_name: vellum
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      # 容器内路径固定，和宿主机解耦
+      DATA_DIR: /app/data
+      PORT: "8787"
+      HOST: 0.0.0.0
+      TRUST_PROXY: "1"
+    volumes:
+      # 数据库和上传的文件都在这里。备份就是备份这个目录。
+      - ./data:/app/data
+    ports:
+      # 只绑本机回环：外面走 Caddy，不把应用直接暴露到公网。
+      # 想在服务器上用 curl 调试就用这个端口。
+      - "127.0.0.1:${VELLUM_PORT:-8787}:8787"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: vellum-caddy
+    restart: unless-stopped
+    depends_on:
+      vellum:
+        condition: service_healthy
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?请在 .env 里设置 SITE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    # 让容器能用 host.docker.internal 访问宿主机上的服务。
+    # 仅当你要把宿主机上别的应用（比如已有的 systemd 服务）也挂到 Caddy 后面时才需要。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # 证书和 Caddy 自己的状态必须持久化，否则每次重启都要重新申请证书，
+      # 而 Let's Encrypt 有频率限制，很快就会签不下来。
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

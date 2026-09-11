@@ -1,0 +1,66 @@
+# ==========================================================================
+# Caddy 配置：自动申请并续期 Let's Encrypt 证书，自动处理 WebSocket 升级，
+# 自动把 http 跳转到 https。这三件事在这里都是默认行为，不需要额外写。
+#
+# 你唯一需要保证的：SITE_DOMAIN 已经解析到这台服务器的公网 IP，
+# 并且 80 和 443 端口在腾讯云安全组里是放通的。
+#
+# 如果这个域名在 Cloudflare 里是「仅 DNS」（灰色云朵），Caddy 能直接申请到
+# 真证书，浏览器直连服务器，传大文件也不受 Cloudflare 免费版超时的限制。
+# 如果开着橙色云朵（代理模式），证书申请会失败或拿到别人的证书，请改成灰云。
+# ==========================================================================
+
+{$SITE_DOMAIN} {
+	# 文本资源压缩。图片和已经压过的文件 Caddy 会自己跳过。
+	encode zstd gzip
+
+	# 分块上传每块只有几 MB，这里给足余量。
+	# 不设的话 Caddy 默认不限大小，公网上的机器容易被塞爆磁盘。
+	request_body {
+		max_size 256MB
+	}
+
+	reverse_proxy vellum:8787
+
+	header {
+		# 不是自己人看的站点，别让搜索引擎收录
+		X-Robots-Tag "noindex, nofollow, noarchive"
+		# 不要把 Caddy 的版本号告诉外面
+		-Server
+
+		# 想强制浏览器一年内只用 HTTPS 访问，把下面这行取消注释。
+		# 注意这是个单向操作：一旦浏览器记住了，在你修好证书之前它会拒绝走 http。
+		# Strict-Transport-Security "max-age=31536000"
+	}
+}
+
+# ==========================================================================
+# 同一台服务器上还有别的站点？照着下面这段加就行。
+#
+# 一个 Caddy 可以按域名（SNI）分流到多个后端，共用一个 80/443。
+# 这比让每个应用自己抢端口要可靠得多。
+#
+# 三种常见的后端写法：
+#
+#   容器里的服务         reverse_proxy 容器名:端口
+#   宿主机上的服务       reverse_proxy host.docker.internal:端口
+#                       （compose 里要加 extra_hosts: host.docker.internal:host-gateway）
+#   别的机器上的服务     reverse_proxy 192.168.1.10:端口
+#
+# 如果那个域名后面还挂着 Cloudflare（橙色云朵，Full 模式回源），
+# 用 tls internal 让 Caddy 签一张本地证书就够了，因为 Full 模式不校验源站证书。
+# 想升级成真证书：把 Cloudflare 改成 Full (strict)，然后把 tls internal
+# 换成 tls 你的邮箱。
+# ==========================================================================
+#
+# wps.example.com {
+# 	tls internal
+# 	encode zstd gzip
+# 	request_body {
+# 		max_size 1GB
+# 	}
+# 	reverse_proxy host.docker.internal:3000
+# 	header {
+# 		-Server
+# 	}
+# }

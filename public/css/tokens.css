@@ -1,0 +1,165 @@
+/* ==========================================================================
+   Vellum 设计令牌
+   亮色编辑感：纸白 + 墨黑 + 单一冷钴蓝。整套界面只有一个强调色，
+   所有圆角只有一套规则，所有字阶只有六档。改这里就能整站换肤。
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   字体：自托管，只发 latin / latin-ext 子集。
+   中文字形交给各平台系统字体，避免为此下载几 MB 的 CJK 字体。
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/fonts/geist/geist-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/fonts/geist/geist-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/fonts/geist-mono/geist-mono-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+    U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/vendor/fonts/geist-mono/geist-mono-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* ---------------------------------------------------------------------
+     颜色。一个强调色贯穿全站，没有第二个彩色。
+     所有前景色对白底都 >= 4.5:1（正文）或 >= 3:1（大字/图形）。
+     --------------------------------------------------------------------- */
+  --canvas: #f6f6f7; /* 应用底色，比纸面略沉一档 */
+  --paper: #ffffff; /* 面板、气泡、输入框 */
+  --paper-sunk: #fbfbfc; /* 列表条目的交替底色 */
+  --ink: #0b0b0d; /* 主文字，对白 20.4:1 */
+  --ink-2: #4a4a52; /* 次要文字，对白 9.0:1 */
+  --ink-3: #6e6e78; /* 元信息，对白 5.0:1 */
+  --line: #e6e6e9; /* 发丝线 */
+  --line-2: #d4d4d9; /* 强分割线、输入框描边 */
+  --accent: #2340e8; /* 唯一强调色，对白 6.9:1 */
+  --accent-ink: #ffffff; /* 强调色上的文字 */
+  --accent-hover: #1a33c9;
+  --accent-wash: #f2f4fe; /* 自己消息的底色，极淡 */
+  --accent-line: #c3cbfa; /* 自己消息的描边 */
+  --danger: #b4232a; /* 对白 6.5:1 */
+  --danger-wash: #fdf3f3;
+  --ok: #1c6b46; /* 对白 6.2:1 */
+  --warn-wash: #fdf8ec;
+  --warn-line: #e8d9a8;
+  --warn-ink: #7a5a10; /* 对白 5.6:1 */
+
+  /* 焦点环：键盘可达性，任何时候都不能省 */
+  --focus: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
+
+  /* ---------------------------------------------------------------------
+     字体
+     --------------------------------------------------------------------- */
+  --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Source Han Sans SC',
+    sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Cascadia Mono', monospace;
+
+  /* 六档字阶，没有第七档 */
+  --t-micro: 0.6875rem; /* 11px 元信息、mono 标签 */
+  --t-small: 0.8125rem; /* 13px 次要正文 */
+  --t-body: 0.9375rem; /* 15px 正文、消息 */
+  --t-lead: 1.0625rem; /* 17px 列表标题 */
+  --t-title: 1.5rem; /* 24px 面板标题 */
+  --t-display: clamp(2rem, 4.2vw, 3.25rem); /* 登录页大标题 */
+
+  --lh-tight: 1.15;
+  --lh-snug: 1.4;
+  --lh-body: 1.65;
+
+  /* ---------------------------------------------------------------------
+     间距：4 的倍数
+     --------------------------------------------------------------------- */
+  --s1: 0.25rem;
+  --s2: 0.5rem;
+  --s3: 0.75rem;
+  --s4: 1rem;
+  --s5: 1.5rem;
+  --s6: 2rem;
+  --s7: 3rem;
+  --s8: 4rem;
+
+  /* ---------------------------------------------------------------------
+     形状。全局只有两个圆角值：
+       --r      所有控件、面板、气泡
+       --r-round 头像与状态点（唯一的圆形，因为它是身份标识）
+     浮层用 --r-lift。除此之外不出现第三种圆角。
+     --------------------------------------------------------------------- */
+  --r: 2px;
+  --r-lift: 4px;
+  --r-round: 999px;
+
+  /* ---------------------------------------------------------------------
+     高度
+     --------------------------------------------------------------------- */
+  --rail-w: 4.5rem;
+  --list-w: 20rem;
+  --header-h: 3.75rem;
+  --composer-min: 3.25rem;
+
+  /* ---------------------------------------------------------------------
+     动效。克制：只用于状态切换和反馈，不做装饰性动画。
+     --------------------------------------------------------------------- */
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --dur-fast: 110ms;
+  --dur: 180ms;
+  --dur-slow: 260ms;
+
+  /* 阴影跟着底色偏冷，不用纯黑 */
+  --shadow-1: 0 1px 2px rgba(16, 18, 38, 0.06);
+  --shadow-2: 0 8px 28px rgba(16, 18, 38, 0.1), 0 1px 2px rgba(16, 18, 38, 0.06);
+  --shadow-3: 0 24px 64px rgba(16, 18, 38, 0.18);
+
+  --z-thread: 1;
+  --z-sticky: 20;
+  --z-overlay: 60;
+  --z-toast: 80;
+}
+
+/* 尊重系统的减弱动态偏好：所有过渡与动画直接关掉 */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur: 1ms;
+    --dur-slow: 1ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

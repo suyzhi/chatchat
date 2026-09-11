@@ -1,0 +1,30 @@
+{
+  "name": "vellum",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vellum - 一个只给几个朋友用的私人聊天站",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "icons": "node tools/build-icons.mjs",
+    "check": "node tools/check-imports.mjs",
+    "smoke": "node tools/smoke.mjs",
+    "browser": "node tools/browser-check.mjs",
+    "shots": "node tools/screenshot.mjs",
+    "verify": "npm run check && npm run smoke && npm run browser"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/geist-mono": "^5.2.7",
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@phosphor-icons/core": "^2.1.1"
+  }
+}

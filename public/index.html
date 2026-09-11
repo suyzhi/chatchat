@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#F6F6F7" />
+    <!-- 私人站点，不希望被任何爬虫收录 -->
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+    <meta name="referrer" content="same-origin" />
+    <title>Vellum</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <link rel="stylesheet" href="/css/tokens.css" />
+    <link rel="stylesheet" href="/css/app.css" />
+  </head>
+  <body>
+    <!-- 首屏骨架：脚本加载前就给出结构，避免白屏跳动 -->
+    <div id="boot" class="boot">
+      <div class="boot__mark" aria-hidden="true">V</div>
+      <p class="boot__text">正在连接</p>
+    </div>
+
+    <div id="app" class="app" hidden></div>
+
+    <!-- 浮层挂载点：对话框、菜单、灯箱、提示条都在这里 -->
+    <div id="overlays" class="overlays"></div>
+    <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
+    <!-- 拖拽上传的全屏提示 -->
+    <div id="dropzone" class="dropzone" hidden aria-hidden="true">
+      <div class="dropzone__inner">
+        <p class="dropzone__title">松手即发送</p>
+        <p class="dropzone__hint">图片、音频、文档、压缩包都行</p>
+      </div>
+    </div>
+
+    <noscript>
+      <div class="noscript">这个应用需要 JavaScript 才能运行。</div>
+    </noscript>
+
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>

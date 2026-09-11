@@ -1,0 +1,22 @@
+# 构建镜像时不需要进上下文的东西。
+# 这个文件越小，docker build 越快。
+
+node_modules
+data
+backups
+screenshots
+.git
+.gitignore
+.env
+.env.local
+.env.example
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.log
+*.md
+tools
+deploy/README.md
+deploy/nginx.conf
+deploy/prepare.sh
+deploy/backup.sh

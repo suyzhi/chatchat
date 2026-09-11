@@ -1,0 +1,27 @@
+# 统一换行符。
+#
+# 这个项目里有需要在 Linux 上执行的 shell 脚本（deploy/*.sh），
+# 如果它们被检出成 CRLF，Linux 会报 "bad interpreter: /bin/bash^M"。
+# 所以这里强制所有文本文件在仓库里和检出时都用 LF，
+# 不管克隆的人用的是 Windows 还是 Linux。
+* text=auto eol=lf
+
+# 下面这些是二进制，别做任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.gz binary
+
+# 明确标出语言，让 GitHub 的语法高亮和统计更准
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.caddyfile text eol=lf
+Caddyfile text eol=lf

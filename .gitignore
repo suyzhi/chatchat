@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+
+# 运行期数据：数据库和上传的文件，绝对不要进版本库
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 配置：里面有会话密钥和邀请码
+.env
+.env.local
+
+# 测试与截图产物
+screenshots/
+*.log
+npm-debug.log*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+tmp/
+*.tmp
