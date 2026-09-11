@@ -36,6 +36,7 @@ import {
 } from './views/dialogs.js';
 import { openMenu, confirmDialog } from './overlays.js';
 import { isNearBottom } from './dom.js';
+import { installFx } from './fx.js';
 
 const rootEl = document.getElementById('app');
 const bootEl = document.getElementById('boot');
@@ -53,6 +54,9 @@ let notificationsAsked = false;
 /* ------------------------------------------------------------------ */
 
 async function main() {
+  // 视觉层先装上：启动画面和登录页也应该吃到这套动作
+  installFx();
+
   let config;
   try {
     config = await api.serverConfig();

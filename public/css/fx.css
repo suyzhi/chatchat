@@ -1,0 +1,1144 @@
+/* ==========================================================================
+   Vellum 前卫层（FX）
+   --------------------------------------------------------------------------
+   这是一层纯加法：全部挂在 html[data-fx="on"] 下，关掉这个属性就回到
+   app.css 的原始界面，一分一毫都不动原来的东西。
+
+   设计意图：原来的底子是「纸白 + 墨黑 + 一个钴蓝」的编辑感，很锋利。
+   这里不换底子，只加两样东西：
+     1. 印刷打样那一套——裁切标记、栅格、颞粒、坐标读数，让界面像一张
+        正在排版的稿纸，而不是一个常见的圆角聊天软件。
+     2. 有方向的运动——每一处出现都从它「该来的方向」进来（左栏从左侧、
+        自己的消息从右侧、标题从基线升起），一律用 expo-out 的急停曲线，
+        快、干脆、不回弹。不动就不要动，动就一次到位。
+
+   所有动画都尊重 prefers-reduced-motion（tokens.css 里已经全局压成 1ms），
+   另外 JS 侧在开启时也会先检查这个偏好。
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   F0. 默认全藏
+   --------------------------------------------------------------------------
+   JS 把这些装饰节点一直留在 DOM 里（关掉开关时不折腾结构），所以它们必须
+   默认 display:none，只有 html[data-fx="on"] 才放出来。少了这一段，关掉开关
+   会剩下一个没有竖排样式的「VELLUM」横躺在左栏。
+   -------------------------------------------------------------------------- */
+
+.fx-wordmark,
+.fx-rail-tick,
+.fx-cross,
+.fx-progress,
+.fx-activity,
+.fx-eq,
+.fx-clock,
+.fx-stage,
+.fx-spacer {
+  display: none;
+}
+
+html[data-fx='on'] {
+  /* 栅格 / 引导线：比发丝线还淡一档，只当质地看 */
+  --fx-hair: rgba(11, 11, 13, 0.042);
+  --fx-cross: rgba(35, 64, 232, 0.16);
+  --fx-cross-2: rgba(35, 64, 232, 0.085);
+
+  /* 急停曲线：起步快、尾巴长，观感是「啪」一下到位，不是弹 */
+  --fx-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --fx-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --fx-t1: 220ms;
+  --fx-t2: 380ms;
+  --fx-t3: 620ms;
+  --fx-swap-dur: 440ms; /* 换会话时整块面板滑一屏 */
+  --fx-ease-slide: cubic-bezier(0.22, 0.61, 0.36, 1); /* 匀速感更强，滑动看得见 */
+  --fx-step: 26ms; /* 列表/消息的错峰步长 */
+  --fx-msg-head: 1.6rem; /* 「名字」那一行的高度，居中头像时要让出去 */
+  --fx-msg-status: 1.15rem; /* 「已送达」那一行的高度，同上 */
+
+  /* 取景框：四角各一个直角，用八层渐变拼出来。
+     只留给消息气泡和输入框——面板四角那版已经去掉了，太吵。 */
+  --fx-frame-accent:
+    linear-gradient(var(--accent), var(--accent)) 0 0 / 7px 1px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 0 0 / 1px 7px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 100% 0 / 7px 1px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 100% 0 / 1px 7px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 0 100% / 7px 1px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 0 100% / 1px 7px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 100% 100% / 7px 1px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 100% 100% / 1px 7px no-repeat;
+}
+
+/* --------------------------------------------------------------------------
+   F1. 质地：颞粒 + 设计栅格
+   -------------------------------------------------------------------------- */
+
+/* 全屏颞粒。opacity 压到 3%，只在白底上形成极细的颗粒感，
+   让大面积留白不至于像没画完的 PPT。用 steps 跳帧，模拟胶片而不是水波。 */
+html[data-fx='on'] body::after {
+  content: '';
+  position: fixed;
+  inset: -60%;
+  z-index: 90;
+  pointer-events: none;
+  opacity: 0.032;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='180' height='180' filter='url(%23n)'/></svg>");
+  background-size: 180px 180px;
+  animation: fx-grain 1.1s steps(4) infinite;
+  will-change: transform;
+}
+@keyframes fx-grain {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  25% {
+    transform: translate3d(-2.5%, 1.5%, 0);
+  }
+  50% {
+    transform: translate3d(1.5%, -2.5%, 0);
+  }
+  75% {
+    transform: translate3d(-1.5%, -1.5%, 0);
+  }
+  100% {
+    transform: translate3d(2.5%, 1%, 0);
+  }
+}
+
+/* 十二栏栅格铺满整个聊天窗口（左右到边、上下到整个可滚区域），
+   而不是只铺中间那条居中的内容列。
+   用 background-attachment: local 让背景跟着内容一起滚：线随消息走，
+   滚到哪儿都在，不会滚一段就只剩空白。
+   气泡是实心白底，所以只在气泡之间的空隙里透出来。 */
+html[data-fx='on'] .thread {
+  background-color: var(--paper);
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--fx-hair) 0 1px,
+    transparent 1px 8.3333%
+  );
+  background-attachment: local;
+}
+html[data-fx='on'] .thread__inner {
+  position: relative;
+  padding: 0 2.75rem;
+  max-width: 58rem;
+}
+
+/* --------------------------------------------------------------------------
+   F2. 打样chrome：裁切标记、滚动进度、坐标十字线
+   -------------------------------------------------------------------------- */
+
+/* 消息栏要当定位上下文：阅读进度条和换会话时的残影都挂在这里 */
+html[data-fx='on'] .pane--thread {
+  position: relative;
+}
+
+/* 消息栏顶端 1px 的阅读进度 */
+html[data-fx='on'] .fx-progress {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  z-index: 7;
+  background: var(--accent);
+  opacity: 0.5;
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+  transition: transform 90ms linear, opacity 240ms linear;
+}
+html[data-fx='on'] .fx-progress[data-idle='true'] {
+  opacity: 0;
+}
+
+/* 跟着鼠标走的十字准线与坐标读数。只在文本区出现，做成「制版台」的感觉。 */
+html[data-fx='on'] .fx-cross {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms linear;
+}
+html[data-fx='on'] .fx-cross[data-on='true'] {
+  opacity: 1;
+}
+html[data-fx='on'] .fx-cross i {
+  position: absolute;
+  display: block;
+}
+html[data-fx='on'] .fx-cross__h {
+  left: var(--fx-left);
+  width: var(--fx-width);
+  top: var(--fx-y);
+  height: 1px;
+  background: var(--fx-cross);
+}
+html[data-fx='on'] .fx-cross__v {
+  top: var(--fx-top);
+  height: var(--fx-height);
+  left: var(--fx-x);
+  width: 1px;
+  background: var(--fx-cross-2);
+}
+html[data-fx='on'] .fx-cross__read {
+  position: absolute;
+  right: calc(100vw - var(--fx-left) - var(--fx-width) + 8px);
+  top: calc(var(--fx-y) + 5px);
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   F3. 左栏：滑块指示器、竖排字标、品牌扫描、FX 开关
+   -------------------------------------------------------------------------- */
+
+html[data-fx='on'] .rail {
+  position: relative;
+}
+html[data-fx='on'] .rail-btn {
+  position: relative;
+  z-index: 1;
+}
+
+/* 唯一的活动指示器：一个真会滑过去的 2px 块，而不是每格各亮各的 */
+html[data-fx='on'] .fx-rail-tick {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2.25rem;
+  z-index: 2;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 420ms var(--fx-ease),
+    width 320ms var(--fx-ease),
+    height 320ms var(--fx-ease),
+    opacity 200ms linear;
+}
+
+/* 消息栏头部的实时钟 + 连接心跳。放在标题和操作按钮之间，
+   像一个设备面板上的读数，而不是聊天软件里的文案。 */
+html[data-fx='on'] .fx-clock {
+  display: flex;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-right: var(--s1);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  pointer-events: none;
+  user-select: none;
+}
+html[data-fx='on'] .fx-clock__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--r-round);
+  background: var(--ok);
+  box-shadow: 0 0 0 2px rgba(28, 107, 70, 0.14);
+  transition: background var(--fx-t1) linear, box-shadow var(--fx-t1) linear;
+}
+/* 断线时心跳改成闪红，比顶部那条横幅更早被注意到 */
+html[data-fx='on'] .fx-clock__dot[data-state='off'] {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px rgba(180, 35, 42, 0.14);
+  animation: fx-caret 1s steps(2) infinite;
+}
+
+/* 竖排字标，把空着的左栏下段用起来 */
+html[data-fx='on'] .fx-wordmark {
+  display: block;
+  margin-top: var(--s2);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+  writing-mode: vertical-rl;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  opacity: 0.5;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* 品牌块：悬停时强调色从下往上灌满。字是白色，所以用 isolation +
+   z-index:-1 把色块压在字下面，而不是盖在字上面。 */
+html[data-fx='on'] .rail__brand {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: transparent;
+}
+html[data-fx='on'] .rail__brand::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--ink);
+}
+html[data-fx='on'] .rail__brand::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: bottom center;
+  transition: transform 420ms var(--fx-ease);
+}
+html[data-fx='on'] .rail__brand:hover::after {
+  transform: none;
+}
+
+/* FX 开关：给评审用的，决定留下来之后可以拿掉 */
+html[data-fx='on'] .fx-toggle,
+html[data-fx='off'] .fx-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r);
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  transition: border-color var(--fx-t1) var(--fx-ease), color var(--fx-t1) var(--fx-ease);
+}
+html .fx-toggle:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.fx-toggle__dot {
+  width: 4px;
+  height: 4px;
+  background: var(--line-2);
+  border-radius: var(--r-round);
+}
+html[data-fx='on'] .fx-toggle__dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+
+/* --------------------------------------------------------------------------
+   F4. 会话列表：错峰入场、悬停指示条、未读脉冲、活动扫光
+   -------------------------------------------------------------------------- */
+
+html[data-fx='on'] .fx-row-in {
+  animation: fx-row-in var(--fx-t2) var(--fx-ease) backwards;
+  animation-delay: calc(var(--fx-i, 0) * var(--fx-step));
+}
+@keyframes fx-row-in {
+  from {
+    opacity: 0;
+    transform: translate3d(-10px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 悬停：左侧长出一条指示条，内容右移 2px */
+html[data-fx='on'] .listitem::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--line-2);
+  transform: scaleY(0);
+  transform-origin: top center;
+  transition: transform 320ms var(--fx-ease), background var(--fx-t1) linear;
+}
+html[data-fx='on'] .listitem:hover::before {
+  transform: none;
+}
+html[data-fx='on'] .listitem[aria-current='true']::before {
+  background: var(--accent);
+  transform: none;
+  transition: transform 320ms var(--fx-ease), background var(--fx-t1) linear;
+}
+html[data-fx='on'] .listitem__main {
+  transition: transform 260ms var(--fx-ease);
+}
+html[data-fx='on'] .listitem:hover .listitem__main {
+  transform: translateX(2px);
+}
+
+html[data-fx='on'] .listitem__badge {
+  animation: fx-badge 340ms var(--fx-ease) backwards;
+}
+@keyframes fx-badge {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 列表头下面 1px 的活动扫光：有消息、有人上下线时扫一道 */
+html[data-fx='on'] .fx-activity {
+  display: block;
+  position: relative;
+  flex: none;
+  height: 1px;
+  margin-bottom: -1px;
+  background: var(--line);
+  overflow: hidden;
+  z-index: 2;
+}
+html[data-fx='on'] .fx-activity::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  transform: translateX(-101%);
+}
+html[data-fx='on'] .fx-activity.fx-on::after {
+  animation: fx-sweep 760ms var(--fx-ease) backwards;
+}
+@keyframes fx-sweep {
+  from {
+    transform: translateX(-101%);
+  }
+  to {
+    transform: translateX(101%);
+  }
+}
+
+/* 列表头的副标题换了内容就重放一次，提示「数字变了」 */
+html[data-fx='on'] .fx-sub-in {
+  animation: fx-sub-in 520ms var(--fx-ease) backwards;
+}
+@keyframes fx-sub-in {
+  from {
+    opacity: 0;
+    transform: translateX(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   F5. 消息流：方向入场、序号行号、悬停取景框
+   -------------------------------------------------------------------------- */
+
+/* 每条消息在左侧空白处有一个等宽序号，像代码编辑器的行号。
+   `decimal-leading-zero` 给出 01 / 02，窄屏放不下就整条藏掉。 */
+html[data-fx='on'] .thread__inner {
+  counter-reset: fx-msg;
+}
+html[data-fx='on'] .msg {
+  counter-increment: fx-msg;
+}
+html[data-fx='on'] .msg::before {
+  content: counter(fx-msg, decimal-leading-zero);
+  position: absolute;
+  left: -2.15rem;
+  top: 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  opacity: 0.17;
+  pointer-events: none;
+  transition: opacity 160ms linear, color 160ms linear;
+}
+html[data-fx='on'] .msg:hover::before {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/*
+ * 头像跟气泡垂直居中，而不是死贴在这一行的顶部。
+ * 有名字行的时候要把名字那一行的高度让出去，否则居中算的是「名字 + 气泡」，
+ * 头像会浮在名字和气泡中间，比现在更难看。这两个高度是从 app.css 推出来的：
+ *   名字行 = --t-small(13px) × --lh-body(1.65) + .msg__col 的 gap(0.15rem) ≈ 1.6rem
+ *   状态行 = 0.625rem × 1.65 + gap(0.15rem)              ≈ 1.15rem
+ * 改了那两处字号，这里要跟着改。
+ */
+html[data-fx='on'] .msg__gutter {
+  align-items: center;
+}
+html[data-fx='on'] .msg:not(.msg--cont) .msg__gutter {
+  padding-top: var(--fx-msg-head);
+}
+html[data-fx='on'] .msg--mine .msg__gutter {
+  padding-bottom: var(--fx-msg-status);
+}
+
+/*
+ * 消息上的「⋯」原来浮在气泡上沿，会压住正文。
+ * 挪到气泡外侧的留白里并垂直居中：气泡的最大宽度让出 2.4rem 当作这条操作道，
+ * 别人的消息按钮在右，自己的在左，两边都永远不会盖住任何字。
+ */
+/*
+ * 留出操作道：给 .msg__col 让出 2.4rem，气泡本身的最大宽度照旧用 app.css 的
+ * min(100%, 46rem)。不能反过来给 .msg__body 写 calc(100% - 2.4rem)：
+ * 它的包含块是「按内容撑开」的外层 div，百分比会绕回去，结果是气泡比自然
+ * 宽度窄 2.4rem，短消息被硬生生折成两行。
+ */
+html[data-fx='on'] .msg:not(.msg--mine) .msg__col {
+  padding-right: 2.6rem;
+}
+html[data-fx='on'] .msg--mine .msg__col {
+  padding-left: 2.6rem;
+}
+html[data-fx='on'] .msg__tools {
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0;
+  background: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+html[data-fx='on'] .msg__tools .icon-btn {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--ink-3);
+}
+html[data-fx='on'] .msg__tools .icon-btn:hover {
+  background: var(--canvas);
+  color: var(--ink);
+}
+html[data-fx='on'] .msg:not(.msg--mine) .msg__tools {
+  right: auto;
+  left: 100%;
+  margin-left: 0.4rem;
+}
+html[data-fx='on'] .msg--mine .msg__tools {
+  left: auto;
+  right: 100%;
+  margin-right: 0.4rem;
+}
+
+/*
+ * 只给「真正新到的消息」做入场（thread.js 会打上 .msg--enter，300ms 后摘掉，
+ * 所以时长必须小于 300ms，动画才跑得完整）。
+ * 位移放大到 18px 才看得见在滑；时长压短、曲线换成前段不那么猛的，
+ * 否则透明度先走完，肉眼只剩「闪一下」。
+ */
+html[data-fx='on'] .msg--enter {
+  animation: fx-msg-in 260ms var(--fx-ease-slide) backwards;
+}
+html[data-fx='on'] .msg--mine.msg--enter {
+  animation-name: fx-msg-in-r;
+}
+@keyframes fx-msg-in {
+  from {
+    opacity: 0;
+    transform: translate3d(-18px, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fx-msg-in-r {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 悬停：气泡四角浮出取景框，像被选中待处理的一块版 */
+html[data-fx='on'] .msg__body::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--fx-frame-accent);
+  transition: opacity var(--fx-t1) linear;
+}
+html[data-fx='on'] .msg:hover .msg__body::after {
+  opacity: 1;
+}
+
+/* 日期分隔线从中间往两边画出来 */
+html[data-fx='on'] .daysep::before {
+  transform-origin: right center;
+  animation: fx-rule 700ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .daysep::after {
+  transform-origin: left center;
+  animation: fx-rule 700ms var(--fx-ease) backwards;
+}
+@keyframes fx-rule {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+html[data-fx='on'] .sysmsg {
+  animation: fx-sys 420ms var(--fx-ease) backwards;
+}
+@keyframes fx-sys {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 「正在输入」改成方头均衡器，跟输入区的电平条同一套语言 */
+html[data-fx='on'] .typing__dots {
+  align-items: center;
+  height: 0.85rem;
+}
+html[data-fx='on'] .typing__dots i {
+  width: 2px;
+  height: 0.625rem;
+  border-radius: 0;
+  animation: fx-type-bar 900ms var(--fx-ease) infinite;
+  transform-origin: center;
+}
+@keyframes fx-type-bar {
+  0%,
+  100% {
+    transform: scaleY(0.32);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+/*
+ * 换会话 = 一条画布在移。JS 把新旧两个会话的消息区当成两块**真实面板**，
+ * 上下相邻地摆进 .fx-reel，然后整条 reel 平移一个面板高。
+ * 两块是兄弟、一起动，谁也不盖谁。
+ *
+ * .fx-stage 是跟消息区等大的取景框：它不参与移动，只负责把画布两端露到
+ * 外面的部分切干净，别让内容盖到标题栏和输入区上。
+ */
+html[data-fx='on'] .fx-stage {
+  display: block;
+  position: absolute;
+  left: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+html[data-fx='on'] .fx-reel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  will-change: transform;
+}
+/*
+ * 画布怎么走，取决于新面板摆在了画布的哪一头（JS 决定子元素顺序）：
+ *
+ *   dir="up"   点在列表里更靠上的人 → 画布是 [新, 旧]，要露出的新面板在 0 处，
+ *              所以从 -h 滑到 0（画布向下走）
+ *   dir="down" 点更靠下的人         → 画布是 [旧, 新]，旧面板在 0 处，
+ *              所以从 0 滑到 -h（画布向上走）
+ *
+ * 两条的关键都是「起点必须正好露出旧面板、终点正好露出新面板」。
+ * 只要终点露的不是新面板，动画结束把真面板放回来时就会闪一下再跳。
+ * 距离用 --fx-reel-h（JS 按面板高度写进 .fx-stage）。
+ */
+html[data-fx='on'] .fx-reel[data-dir='up'] {
+  animation: fx-reel-slide-down var(--fx-swap-dur) var(--fx-ease-slide) both;
+}
+html[data-fx='on'] .fx-reel[data-dir='down'] {
+  animation: fx-reel-slide-up var(--fx-swap-dur) var(--fx-ease-slide) both;
+}
+@keyframes fx-reel-slide-down {
+  from {
+    transform: translate3d(0, calc(-1 * var(--fx-reel-h, 100%)), 0);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes fx-reel-slide-up {
+  from {
+    transform: none;
+  }
+  to {
+    transform: translate3d(0, calc(-1 * var(--fx-reel-h, 100%)), 0);
+  }
+}
+/*
+ * 换会话期间顶住 .thread 的可滚高度，别让它塌成空容器。
+ * display 必须显式写回来：F0 那段默认把 .fx-spacer 藏起来了，
+ * 少了这一行它就真的不占位，占位块等于没加。
+ */
+html[data-fx='on'] .fx-spacer {
+  display: block;
+  flex: none;
+  width: 100%;
+  pointer-events: none;
+}
+
+/* 一块面板 = 一个会话的完整消息区：自己裁剪、自己有滚动位置 */
+html[data-fx='on'] .fx-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--s4) 0 var(--s5);
+  background-color: var(--paper);
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--fx-hair) 0 1px,
+    transparent 1px 8.3333%
+  );
+}
+
+/* --------------------------------------------------------------------------
+   F6. 空状态 / 骨架
+   -------------------------------------------------------------------------- */
+
+html[data-fx='on'] .empty__mark {
+  position: relative;
+  animation: fx-mark 620ms var(--fx-ease) backwards;
+}
+@keyframes fx-mark {
+  from {
+    opacity: 0;
+    transform: scale(0.84);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+html[data-fx='on'] .empty__title {
+  animation: fx-rise 560ms 60ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .empty__text {
+  animation: fx-rise 560ms 120ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .empty__actions {
+  animation: fx-rise 560ms 180ms var(--fx-ease) backwards;
+}
+@keyframes fx-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.42em);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   F7. 输入区：取景框聚焦、电平条、发送爆点
+   -------------------------------------------------------------------------- */
+
+html[data-fx='on'] .composer__box {
+  position: relative;
+}
+html[data-fx='on'] .composer__box::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background: var(--fx-frame-accent);
+  opacity: 0;
+  transition: opacity var(--fx-t1) linear;
+}
+html[data-fx='on'] .composer__box:focus-within::after {
+  opacity: 1;
+}
+
+/* 打字时的电平条：停在低位待机，敲一下就跳 */
+html[data-fx='on'] .fx-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 0.85rem;
+  pointer-events: none;
+}
+html[data-fx='on'] .fx-eq i {
+  width: 2px;
+  min-height: 2px;
+  background: var(--ink-3);
+  /* 待机时完全藏起来，中间那块位置平时是空的 */
+  opacity: 0;
+  transition: opacity 220ms linear;
+}
+html[data-fx='on'] .fx-eq[data-hot='true'] i {
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* 发送时按钮位置炸开一圈发丝方框 */
+html[data-fx='on'] .fx-burst {
+  position: fixed;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: -1.125rem 0 0 -1.125rem;
+  pointer-events: none;
+  z-index: 92;
+  border: 1px solid var(--accent);
+  border-radius: var(--r);
+  animation: fx-burst 460ms var(--fx-ease) both;
+}
+html[data-fx='on'] .fx-burst--2 {
+  animation-delay: 90ms;
+  border-color: var(--accent-line);
+}
+@keyframes fx-burst {
+  from {
+    opacity: 0.9;
+    transform: scale(0.45) rotate(-4deg);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.1) rotate(4deg);
+  }
+}
+
+/* 发送按钮：悬停时强调色从下往上灌，和品牌块同一手 */
+html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--accent);
+  transform: translateY(101%);
+  transition: transform 320ms var(--fx-ease);
+}
+html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn:hover::after {
+  transform: none;
+}
+html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn:hover {
+  color: var(--accent-ink);
+}
+
+/* --------------------------------------------------------------------------
+   F8. 浮层：对话框取景框、菜单、提示条、拖拽、灯箱
+   -------------------------------------------------------------------------- */
+
+html[data-fx='on'] .scrim {
+  animation: fx-fade 200ms linear backwards;
+}
+@keyframes fx-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+html[data-fx='on'] .dialog {
+  animation: fx-dialog-in 340ms var(--fx-ease) backwards;
+}
+@keyframes fx-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.988);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+html[data-fx='on'] .menu {
+  animation: fx-menu-in 200ms var(--fx-ease) backwards;
+}
+@keyframes fx-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html[data-fx='on'] .toast {
+  position: relative;
+  overflow: hidden;
+  animation: fx-toast-in 380ms var(--fx-ease) backwards;
+}
+@keyframes fx-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+html[data-fx='on'] .toast::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+html[data-fx='on'] .dropzone__inner {
+  position: relative;
+  overflow: hidden;
+  animation: fx-dialog-in 400ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .dropzone__inner::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.45;
+  animation: fx-drop-scan 1.9s var(--fx-ease) infinite;
+}
+@keyframes fx-drop-scan {
+  from {
+    top: 0;
+  }
+  to {
+    top: 100%;
+  }
+}
+
+html[data-fx='on'] .lightbox__stage img {
+  animation: fx-zoom 460ms var(--fx-ease) backwards;
+}
+@keyframes fx-zoom {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 主按钮：悬停时深色从下往上推上来，替代生硬的底色跳变 */
+html[data-fx='on'] .btn--primary {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--accent);
+}
+html[data-fx='on'] .btn--primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--accent-hover);
+  transform: translateY(101%);
+  transition: transform 320ms var(--fx-ease);
+}
+html[data-fx='on'] .btn--primary:hover:not(:disabled) {
+  background: var(--accent);
+}
+html[data-fx='on'] .btn--primary:hover:not(:disabled)::after {
+  transform: none;
+}
+
+/* --------------------------------------------------------------------------
+   F9. 启动画面 / 登录页 / 应用入场
+   -------------------------------------------------------------------------- */
+
+/* 启动：一个居中的十字准星，品牌块像快门一样张开，下面一条不定长扫描线 */
+html[data-fx='on'] .boot {
+  position: relative;
+}
+html[data-fx='on'] .boot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(var(--fx-hair), var(--fx-hair)),
+    linear-gradient(var(--fx-hair), var(--fx-hair));
+  background-size: 100% 1px, 1px 100%;
+  background-position: 0 50%, 50% 0;
+  background-repeat: no-repeat;
+}
+html[data-fx='on'] .boot__mark {
+  position: relative;
+  animation: fx-mark 700ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .boot::after {
+  content: '';
+  width: 8rem;
+  height: 1px;
+  background-image: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 42% 100%;
+  background-repeat: no-repeat;
+  animation: fx-scan 1.15s var(--fx-ease) infinite;
+}
+@keyframes fx-scan {
+  from {
+    background-position: -42% 0;
+  }
+  to {
+    background-position: 142% 0;
+  }
+}
+html[data-fx='on'] .boot__text::after {
+  content: '▌';
+  margin-left: 0.35em;
+  animation: fx-caret 1.05s steps(2) infinite;
+}
+@keyframes fx-caret {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 登录页：标题从基线升起来，事实行依次落位，表单字段跟着走 */
+html[data-fx='on'] .auth {
+  animation: fx-app-in 520ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .auth__headline {
+  animation: fx-rise 780ms 60ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .auth__sub {
+  animation: fx-rise 780ms 180ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .auth__facts {
+  animation: fx-rise 700ms 320ms var(--fx-ease) backwards;
+}
+html[data-fx='on'] .auth__form > * {
+  animation: fx-field-in 520ms var(--fx-ease) backwards;
+}
+@keyframes fx-field-in {
+  from {
+    opacity: 0;
+    transform: translateY(9px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+html[data-fx='on'] .auth__form > *:nth-child(1) {
+  animation-delay: 120ms;
+}
+html[data-fx='on'] .auth__form > *:nth-child(2) {
+  animation-delay: 160ms;
+}
+html[data-fx='on'] .auth__form > *:nth-child(3) {
+  animation-delay: 200ms;
+}
+html[data-fx='on'] .auth__form > *:nth-child(4) {
+  animation-delay: 240ms;
+}
+html[data-fx='on'] .auth__form > *:nth-child(5) {
+  animation-delay: 280ms;
+}
+html[data-fx='on'] .auth__form > *:nth-child(6) {
+  animation-delay: 320ms;
+}
+html[data-fx='on'] .auth__card > .auth__title,
+html[data-fx='on'] .auth__card > .auth__note {
+  animation: fx-rise 620ms 40ms var(--fx-ease) backwards;
+}
+
+/* 进应用时整体从下往上揭开一点，减少「啪」地换页 */
+html[data-fx='on'] .app {
+  animation: fx-app-in 480ms var(--fx-ease) backwards;
+}
+@keyframes fx-app-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   F10. 窄屏：只留下不占地方的那几样
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 52rem) {
+  /* 行号、裁切标记、十字准线、竖排字标在窄屏都是纯噪音 */
+  html[data-fx='on'] .pane--thread::after,
+  html[data-fx='on'] .fx-wordmark,
+  html[data-fx='on'] .fx-cross,
+  html[data-fx='on'] .fx-clock,
+  html[data-fx='on'] .fx-toggle {
+    display: none;
+  }
+  html[data-fx='on'] .msg::before {
+    content: none;
+  }
+  html[data-fx='on'] .thread__inner {
+    padding: 0 var(--s3);
+    max-width: none;
+  }
+  /* 底部导航条上的滑块改成横躺 */
+  html[data-fx='on'] .fx-progress {
+    top: auto;
+    bottom: 0;
+  }
+}
+
+@media (max-width: 40rem) {
+  html[data-fx='on'] .fx-eq {
+    display: none;
+  }
+}
+
+/* 打印时把所有装饰层拿掉 */
+@media print {
+  html[data-fx='on'] body::after,
+  html[data-fx='on'] .fx-cross,
+  html[data-fx='on'] .fx-progress,
+  html[data-fx='on'] .pane--thread::after {
+    display: none !important;
+  }
+}
