@@ -863,6 +863,9 @@ export function createThread(headHost, scrollHost, footHost, handlers) {
       if (activeId === conversationId) return;
       activeId = conversationId;
       state.activeId = conversationId;
+      /* 通知中栏把高亮挪过来。openConversation 里的 navigate() 在设置 activeId
+         之前就把列表重绘了一遍，所以不补这一下，高亮会一直停在上一个会话上。 */
+      bus.emit('active:changed', conversationId);
       editing.id = null;
       stopCurrentAudio();
 
@@ -913,6 +916,7 @@ export function createThread(headHost, scrollHost, footHost, handlers) {
     close() {
       activeId = null;
       state.activeId = null;
+      bus.emit('active:changed', null);
       stopCurrentAudio();
       renderAll();
     },

@@ -1624,12 +1624,14 @@ audio {
   flex: none;
 }
 
+/* 提示行在输入框上方。放在下面会被中文输入法的候选框盖住，
+   所以 margin 是往下的，而不是往上。 */
 .composer__foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-  margin-top: var(--s2);
+  margin: 0 0 var(--s2);
   min-height: 1.2rem;
 }
 .composer__hint {

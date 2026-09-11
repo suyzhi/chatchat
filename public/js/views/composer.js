@@ -741,16 +741,18 @@ export function createComposer(host, handlers) {
     banner,
     recorderBar,
     tray,
+    // 提示行放在输入框上面：放下面的话，中文输入法的候选框（跟着光标
+    // 出现在输入框下方）会正好把它盖住。
+    h(
+      'div.composer__foot',
+      h('span.composer__hint', h('kbd', 'Enter'), ' 发送  ·  ', h('kbd', 'Shift+Enter'), ' 换行'),
+      h('span.composer__hint', { id: 'composer-status' }),
+    ),
     h(
       'div.composer__box',
       h('div.composer__tools', attachBtn, emojiBtn, micBtn),
       input,
       h('div.composer__tools', sendBtn),
-    ),
-    h(
-      'div.composer__foot',
-      h('span.composer__hint', h('kbd', 'Enter'), ' 发送  ·  ', h('kbd', 'Shift+Enter'), ' 换行'),
-      h('span.composer__hint', { id: 'composer-status' }),
     ),
     imageInput,
     fileInput,

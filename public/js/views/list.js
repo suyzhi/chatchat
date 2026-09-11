@@ -384,6 +384,13 @@ export function createList(headHost, bodyHost, handlers) {
   /* ---------------- 订阅 ---------------- */
 
   const offs = [
+    /* 会话在消息栏被打开/关闭时，只改高亮，不重绘整个列表 */
+    bus.on('active:changed', (id) => {
+      const want = id === null || id === undefined ? null : String(id);
+      for (const row of bodyHost.querySelectorAll('.listitem[data-conv-id]')) {
+        row.setAttribute('aria-current', row.dataset.convId === want ? 'true' : 'false');
+      }
+    }),
     bus.on('conversations:changed', () => {
       if (view === 'chats' || view === 'contacts') render();
     }),

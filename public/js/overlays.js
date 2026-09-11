@@ -2,7 +2,7 @@
  * 浮层基础件：对话框、右键菜单、确认框、输入框、图片灯箱。
  * 全部走同一套焦点管理，键盘用户不会被卡在里面。
  */
-import { h, fill, trapFocus, toast } from './dom.js';
+import { h, fill, append, trapFocus, toast } from './dom.js';
 import { icon } from './icon.js';
 import { bytes, timeFull } from './format.js';
 
@@ -48,7 +48,13 @@ export function openDialog(opts) {
   };
 
   const footActions = actions ? actions(close) : [];
-  dialog.append(
+  /*
+   * 必须用 dom.js 的 append，不能用原生 Element.append：
+   * 原生 append 会把 null 转成字符串，于是没有底部按钮的对话框（比如
+   * 「开始新聊天」）末尾会多出一个纯文本的 null。
+   * 这里的 append 会跳过 null / undefined / false。
+   */
+  append(dialog, [
     h(
       'div.dialog__head',
       h(
@@ -61,7 +67,7 @@ export function openDialog(opts) {
     ),
     body ? bodyEl : null,
     footActions.length ? h('div.dialog__foot', footActions) : null,
-  );
+  ]);
 
   const scrim = h('div.scrim', {
     onMousedown: (e) => {
