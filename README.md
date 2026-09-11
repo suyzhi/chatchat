@@ -176,4 +176,14 @@ npm run shots      # 截图到 ./screenshots
 
 ## 许可
 
-代码随便用。图标来自 [Phosphor Icons](https://phosphoricons.com/)（MIT），字体是 [Geist](https://vercel.com/font)（OFL）。
+本项目采用 [MIT 许可证](LICENSE)。
+
+第三方资源：
+
+| 资源 | 来源 | 许可 |
+| --- | --- | --- |
+| 图标 | [Phosphor Icons](https://phosphoricons.com/) | MIT |
+| 字体 | [Geist](https://vercel.com/font) | SIL Open Font License 1.1 |
+
+图标不是手写的：`tools/build-icons.mjs` 从 `@phosphor-icons/core` 官方包里提取用到的路径数据，生成 `public/js/icons.js`。
+
