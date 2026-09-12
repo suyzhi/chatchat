@@ -538,16 +538,28 @@ function placeRailTick(instant = false) {
     return;
   }
   if (instant) railTick.style.transition = 'none';
-  /* 窄屏左栏变成底部横条，滑块跟着躺下 */
+  /*
+   * 左栏宽屏是竖的（滑块贴左边、竖着量高度），窄屏是底部横条（滑块横躺、
+   * 贴导航条上沿）。
+   *
+   * 贴哪条边写死在 CSS 里：宽屏 left:0/top:0，窄屏 left:0/top:0（上沿）。
+   * CSS 只负责「贴哪条边」，沿那条边滑到哪一格一律由 transform 决定 ——
+   * 两处都写偏移量会叠加，滑块就会跑到隔壁那一格去（踩过一次）。
+   */
   const horizontal = getComputedStyle(railHost).flexDirection === 'row';
   if (horizontal) {
-    railTick.style.width = `${ar.width}px`;
+    /* 宽度只取按钮中间一段：48px 的方块上顶一根等宽横条显得笨，
+       2/3 宽居中才像个「当前项」的记号。 */
+    const w = Math.round(ar.width * 0.66);
+    const dx = Math.round(ar.left - rr.left + (ar.width - w) / 2);
+    railTick.style.setProperty('--fx-tick-w', `${w}px`);
+    railTick.style.width = `${w}px`;
     railTick.style.height = '2px';
-    railTick.style.transform = `translate3d(${ar.left - rr.left}px, 0, 0)`;
+    railTick.style.transform = `translate3d(${dx}px, 0, 0)`;
   } else {
     railTick.style.width = '2px';
     railTick.style.height = `${ar.height}px`;
-    railTick.style.transform = `translate3d(0, ${ar.top - rr.top}px, 0)`;
+    railTick.style.transform = `translate3d(0, ${Math.round(ar.top - rr.top)}px, 0)`;
   }
   railTick.style.opacity = '1';
   if (instant) requestAnimationFrame(() => { railTick.style.transition = ''; });
@@ -777,8 +789,10 @@ export function installFx() {
     }
   });
 
-  /* 窗口尺寸变了要重新量导航滑块 */
-  window.addEventListener('resize', raf(placeRailTick), { passive: true });
+  /* 窗口尺寸变了要重新量导航滑块。手机横竖屏切换不一定触发 resize
+     （取决于浏览器），orientationchange 也听一手，避免滑块留在原处。 */
+  window.addEventListener('resize', raf(() => placeRailTick(true)), { passive: true });
+  window.addEventListener('orientationchange', raf(() => placeRailTick(true)), { passive: true });
 
   /* 实时钟 */
   setInterval(paintClock, 1000);

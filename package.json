@@ -14,6 +14,7 @@
     "check": "node tools/check-imports.mjs",
     "smoke": "node tools/smoke.mjs",
     "browser": "node tools/browser-check.mjs",
+    "mobile": "node tools/mobile-audit.mjs",
     "shots": "node tools/screenshot.mjs",
     "verify": "npm run check && npm run smoke && npm run browser"
   },

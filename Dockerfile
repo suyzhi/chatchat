@@ -3,10 +3,16 @@
 #
 # 两段式：builder 装依赖（含编译工具，防止 better-sqlite3 没有现成二进制时
 # 编译失败），runtime 只带走 node_modules 和源码，镜像更小。
+# APT_MIRROR：Debian 软件源。默认留空 = 用官方源 deb.debian.org。
 #
-# APT_MIRROR：Debian 软件源。默认用腾讯云内网源，因为国内服务器访问
-# deb.debian.org 经常慢到超时（实测能卡十分钟以上）。
-# 部署在境外或想用官方源，构建时加 --build-arg APT_MIRROR= 留空即可。
+# 这里原来是 mirrors.tencentyun.com（腾讯云**内网**源）。它只在腾讯云的机器上
+# 能解析，一旦换到别家（甲骨文、搬瓦工、自建机房……）就是
+# "Something wicked happened resolving ... No address associated with hostname"，
+# 构建会在 apt 那一步直接失败 —— 而这一步失败的原因跟代码毫无关系，很容易
+# 被误判成代码有问题。所以默认改成谁都能用的官方源。
+#
+# 机器确实在腾讯云内网、想省那点下载时间的话，显式传回去：
+#   docker compose build --build-arg APT_MIRROR=mirrors.tencentyun.com
 # ==========================================================================
 
 # --------------------------------------------------------------------------
@@ -14,24 +20,36 @@
 # --------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS builder
 
-ARG APT_MIRROR=mirrors.tencentyun.com
+ARG APT_MIRROR=
+ARG DEBIAN_MIRROR=deb.debian.org
 
 WORKDIR /app
 
 # better-sqlite3 是原生模块。有预编译包时这几步用不上，没有时它们保证能编译出来。
 # 放在 builder 里，最终镜像不会背上编译器。
+#
+# 源不通时自动退回官方源：换源这件事本身不该成为构建失败的理由。
 RUN set -eux; \
+    apt_ok=0; \
     if [ -n "$APT_MIRROR" ]; then \
+      echo "使用指定软件源: ${APT_MIRROR}"; \
+      if apt-get -o Acquire::Retries=2 update >/dev/null 2>&1 \
+         && apt-get install -y --no-install-recommends python3 make g++ >/dev/null 2>&1; then \
+        apt_ok=1; \
+      else \
+        echo "指定软件源不可用，退回 ${DEBIAN_MIRROR}" >&2; \
+      fi; \
+    fi; \
+    if [ "$apt_ok" = "0" ]; then \
       if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
-        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+        sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g; s|security.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
       fi; \
       if [ -f /etc/apt/sources.list ]; then \
-        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list; \
+        sed -i "s|deb.debian.org|${DEBIAN_MIRROR}|g; s|security.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list; \
       fi; \
-      echo "已切换到软件源: ${APT_MIRROR}"; \
+      apt-get -o Acquire::Retries=3 update; \
+      apt-get install -y --no-install-recommends python3 make g++; \
     fi; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends python3 make g++; \
     rm -rf /var/lib/apt/lists/*
 
 # 只复制清单文件，改源码不会让依赖层失效

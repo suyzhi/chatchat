@@ -209,7 +209,10 @@ html[data-fx='on'] .rail-btn {
   z-index: 1;
 }
 
-/* 唯一的活动指示器：一个真会滑过去的 2px 块，而不是每格各亮各的 */
+/* 唯一的活动指示器：一个真会滑过去的 2px 块，而不是每格各亮各的。
+   贴哪条边由 CSS 决定（宽屏贴左栏左边，窄屏贴底部导航条上沿 —— 不能贴
+   下沿，那儿是 iPhone 的 home 指示条），沿边滑到哪一格由 JS 写 transform，
+   两边不重复算偏移。 */
 html[data-fx='on'] .fx-rail-tick {
   display: block;
   position: absolute;
@@ -1101,10 +1104,25 @@ html[data-fx='on'] .app {
 }
 
 /* --------------------------------------------------------------------------
-   F10. 窄屏：只留下不占地方的那几样
+   F10. 手机 / 触屏
+   --------------------------------------------------------------------------
+   宽屏上这层是「仪器面板」，窄屏上没有那么多地方摆仪器：屏幕只有 320~430px
+   宽，任何一处装饰都在跟正文抢空间。所以这里的原则是**只留下不占地方的
+   那几样**，其余全部收掉，并且按触屏的真实约束（没有 hover、没有指针、
+   手指比鼠标粗、刘海和 home 指示条、软键盘）重新量一遍尺寸。
+
+   分两类写：
+     1. max-width  管「地方不够」——挤不下的装饰直接撤；
+     2. hover:none / pointer:coarse 管「手指在操作」——不依赖屏幕宽度，
+        平板横屏、折叠屏展开后同样是手指，一样要吃到。
    -------------------------------------------------------------------------- */
 
-@media (max-width: 52rem) {
+/* ---- 1. 窄屏：撤掉占地方的仪器 ---- */
+
+/* 条件是 app.css 里那条手机断点的同一条（窄屏、或者矮到放不下三栏），
+   这样横屏手机拿到的也是手机布局 + 手机版装饰，不会出现「布局是手机、
+   装饰还按宽屏铺满」的错配。 */
+@media (max-width: 52rem), (max-width: 60rem) and (max-height: 30rem) {
   /* 行号、裁切标记、十字准线、竖排字标在窄屏都是纯噪音 */
   html[data-fx='on'] .pane--thread::after,
   html[data-fx='on'] .fx-wordmark,
@@ -1120,16 +1138,116 @@ html[data-fx='on'] .app {
     padding: 0 var(--s3);
     max-width: none;
   }
-  /* 底部导航条上的滑块改成横躺 */
+  /* 底部导航条上的滑块：横躺 + 贴导航条上沿（下沿是 home 指示条的位置） */
+  html[data-fx='on'] .fx-rail-tick {
+    width: var(--fx-tick-w, 3rem);
+    height: 2px;
+    top: 0;
+  }
   html[data-fx='on'] .fx-progress {
     top: auto;
     bottom: 0;
   }
+
+  /* 气泡可用宽度：宽屏给操作道留 2.6rem 是因为那条竖着的 hover 工具条
+     正好落在气泡外侧；手机上气泡本来就顶到边，再留 41px 就是把正文挤成
+     一列窄条。窄屏收到 2rem —— 工具条（1.75rem 按钮 + 0.4rem 间距 =
+     2.15rem）仍然完整落在留白里，不会被裁掉。 */
+  html[data-fx='on'] .msg:not(.msg--mine) .msg__col {
+    padding-right: 2rem;
+  }
+  html[data-fx='on'] .msg--mine .msg__col {
+    padding-left: 2rem;
+  }
+
+  /* 消息区十二栏栅格：宽屏气泡窄、留白多，栅格是「稿纸」；手机上气泡
+     几乎顶满，1px 竖线会直接压在气泡上，看着像没对齐的表格线。窄屏换成
+     更稀的 6 栏，只当极淡的质地看。 */
+  html[data-fx='on'] .thread,
+  html[data-fx='on'] .fx-slot {
+    background-image: repeating-linear-gradient(
+      to right,
+      var(--fx-hair) 0 1px,
+      transparent 1px 16.6667%
+    );
+  }
+
+  /* 错峰入场：一屏能看见的行数少了，步长放大一点才看得出「一条条落位」，
+     否则和整块淡入没区别。 */
+  html[data-fx='on'] {
+    --fx-step: 44ms;
+  }
 }
 
-@media (max-width: 40rem) {
+/* 矮视口（横屏手机 / 小窗）：底部导航占掉的每一像素都是消息的高度，
+   所以导航条本身收紧，滑块跟着变薄、挪到导航条下沿（横屏时下沿离
+   home 指示条还远，不像竖屏那样被安全区挤住）。 */
+@media (max-width: 60rem) and (max-height: 30rem) {
+  html[data-fx='on'] .fx-rail-tick {
+    top: auto;
+    bottom: 0;
+    height: 1px;
+  }
+}
+
+@media (max-width: 40rem), (max-height: 30rem) {
   html[data-fx='on'] .fx-eq {
     display: none;
+  }
+}
+
+/* ---- 2. 触屏：没有指针，就没有悬停 ---- */
+
+/*
+ * 触屏上 :hover 会「粘住」——点过的按钮颜色退不回去，点过的气泡四角一直
+ * 挂着取景框。宽屏那几处靠 hover 揭示的东西（取景框、上浮填充）在手机上
+ * 既没法触发、触发后又卡住，所以整组压掉，只留 :active / :focus-within
+ * 这种「按下去」的即时反馈。
+ */
+@media (hover: none) {
+  /* 键盘提示行在手机上没意义（外接键盘是极少数），还白占 16px 高度 */
+  html[data-fx='on'] .composer__hint {
+    display: none;
+  }
+  /* 悬停才出现的取景框一律收掉 */
+  html[data-fx='on'] .msg__body::after,
+  html[data-fx='on'] .msg:hover .msg__body::after {
+    display: none;
+  }
+  /* 发送按钮 / 主按钮的上浮填充改成不透明底色，别留半截悬停态 */
+  html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn::after,
+  html[data-fx='on'] .btn--primary::after {
+    display: none;
+  }
+  html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn:hover {
+    color: inherit;
+  }
+  /* 按下去才给反馈 */
+  html[data-fx='on'] .btn--primary:active:not(:disabled) {
+    background: var(--accent-hover);
+  }
+  html[data-fx='on'] .composer__box > .composer__tools:last-of-type .icon-btn:active {
+    color: var(--accent);
+  }
+  html[data-fx='on'] .rail-btn:active {
+    background: var(--canvas);
+  }
+  html[data-fx='on'] .listitem:active::before {
+    transform: none;
+    background: var(--line-2);
+  }
+}
+
+/*
+ * 触摸设备：全屏颞粒是固定层 + 无限 steps 动画 + 每帧重绘，中低端机上
+ * 是有代价的。手机上留 1/8 的面积、降到 2.2%，颗粒感还在，重绘面积少一个
+ * 数量级。用尺寸媒体查询而不是 pointer:coarse —— 屏幕小的地方才算力不从心，
+ * 桌面触屏显示器不需要为它降级。
+ */
+@media (max-width: 52rem), (max-width: 60rem) and (max-height: 30rem) {
+  html[data-fx='on'] body::after {
+    inset: 0;
+    opacity: 0.022;
   }
 }
 

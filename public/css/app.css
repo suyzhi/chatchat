@@ -2257,8 +2257,17 @@ audio {
   }
 }
 
-/* 手机：单栏 + 视图切换 */
-@media (max-width: 52rem) {
+/*
+ * 手机：单栏 + 视图切换。
+ *
+ * 第二个条件（max-height: 30rem）是给**横屏手机**留的：横屏时短边变成高度，
+ * 宽度可能到 844px，光看宽度会以为这是一台平板，于是套上三栏桌面布局 ——
+ * 结果 390px 的高度里塞一个 60px 标题栏、一个 46px 输入区和一条底部导航，
+ * 消息区只剩不到 300px，而且左边两栏白占 344px 宽。同一个界面竖过来是手机、
+ * 横过来就变平板，这显然不对。所以「矮」也当作手机处理：竖屏手机的横屏态、
+ * 折叠屏展开一半、以及把桌面窗口压扁，都归到这里。
+ */
+@media (max-width: 52rem), (max-width: 60rem) and (max-height: 30rem) {
   .app {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) auto;
@@ -2332,6 +2341,85 @@ audio {
   }
   .rail-btn {
     width: 3rem;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   21b. 手机上的触摸尺寸
+   --------------------------------------------------------------------------
+   跟这一节上面几条的取舍不同：上面是「地方不够就撤」，这里是**手指的硬
+   约束**，改的是尺寸而不是布局，宽屏一根头发都不动。
+
+   为什么非要贴着屏幕宽度一起判断：桌面上把浏览器窗口拉窄到 600px 也满足
+   max-width，但鼠标不需要 44px 的命中区，放大字号反而会挤掉正文。所以这
+   几条一律要求「窄屏 **且** 手指操作」两个条件同时成立（横屏手机的短边
+   是高度，所以第二个条件跟着放宽到 max-height: 30rem）。
+
+   两条硬指标：
+     · 命中区 ≥ 44×44 —— 低于这个尺寸误触率明显上升（31px 的图标底部导航
+       在真机上大约每五次点按就会错一次）；
+     · 文字输入控件字号 ≥ 16px —— iOS Safari 会把小于 16px 的输入框在聚焦
+       时整页放大，用户还得手动缩回去，聊天软件里这是最烦人的一类毛病。
+   -------------------------------------------------------------------------- */
+
+@media (max-width: 52rem), (max-width: 60rem) and (max-height: 30rem) {
+  /* 底部导航：按钮撑到 44px 高。图标和按钮之间那一大截空白靠 padding
+     补上，所以竖排时要把原来压给图标的上内边距收回来，否则整个动作区
+     会往上顶、盖住列表最后一行。 */
+  .rail-btn {
+    min-height: 2.75rem;
+  }
+  .rail {
+    padding-top: var(--s1);
+    padding-bottom: max(var(--s1), env(safe-area-inset-bottom));
+  }
+
+  /* 表单控件：字号抬到 16px，横向内边距收一点把多出来的宽度还回去 */
+  .input,
+  .textarea,
+  .composer__input,
+  .searchbar input {
+    font-size: 1rem;
+  }
+  .input,
+  .searchbar input {
+    padding-left: var(--s2);
+    padding-right: var(--s2);
+  }
+  .searchbar input {
+    height: 2.5rem;
+  }
+
+  /* 聊天软件的键盘提示行在手机上没有意义：这一行白占 16px 消息高度。
+     提示行藏起来之后输入框上面就不需要那道间隔了（用 :has 判断，
+     老浏览器不认这条选择器时只是多留 8px，不影响功能）。 */
+  .composer__hint {
+    display: none;
+  }
+  .composer__foot {
+    min-height: auto;
+  }
+  .composer__foot:has(.composer__hint:only-child) {
+    min-height: 1.9rem;
+  }
+}
+
+/* 横屏 / 矮视口：底部导航每多占 10px 都是从消息里抠的。导航按钮的命中区
+   不该缩水（手指没变小），缩的是导航条自己的内边距和图标上下的空白；
+   输入框的横向内边距也还给文字。 */
+@media (max-width: 60rem) and (pointer: coarse) and (max-height: 30rem) {
+  .rail {
+    padding-top: 2px;
+    padding-bottom: max(2px, env(safe-area-inset-bottom));
+  }
+  .rail-btn {
+    min-height: 2.25rem;
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+  .input,
+  .searchbar input {
+    padding-left: var(--s3);
   }
 }
 

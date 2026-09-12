@@ -42,6 +42,23 @@ const rootEl = document.getElementById('app');
 const bootEl = document.getElementById('boot');
 const dropEl = document.getElementById('dropzone');
 
+/*
+ * 「现在是不是手机布局」——必须和 app.css 第 21 节那条断点一字不差：
+ *
+ *   @media (max-width: 52rem), (max-width: 60rem) and (max-height: 30rem)
+ *
+ * 第二个条件管横屏手机：那样宽度能到 844px，只比 832px 的阈值多一点点，
+ * 光看宽度会把它当平板。CSS 已经按「矮也算手机」出了单栏布局，JS 这边要是
+ * 还用 innerWidth <= 832 判断，就会出现「布局是手机的、逻辑是桌面的」——
+ * 点会话不进消息栏、Esc 退不回列表。
+ *
+ * 用 MediaQueryList 而不是每次算一遍 innerWidth：两者共用同一份条件，
+ * 不会各写各的。挂在 window 上是给 store.js 初始化用（模块求值顺序在前）。
+ */
+const MOBILE_MQ = '(max-width: 52rem), (max-width: 60rem) and (max-height: 30rem)';
+window.__vellumMobile = window.matchMedia(MOBILE_MQ);
+const isMobileLayout = () => window.__vellumMobile.matches;
+
 /* 运行时引用，登录后才会被赋值 */
 let shell = null;
 let list = null;
@@ -226,7 +243,7 @@ async function bootApp() {
     }, 800);
   }
 
-  if (window.innerWidth <= 832) shell.setMobilePane('list');
+  if (isMobileLayout()) shell.setMobilePane('list');
 }
 
 function teardown() {
@@ -248,7 +265,7 @@ function navigate(view) {
   state.view = view;
   shell.setView(view);
   list.setView(view === 'search' ? 'search' : view);
-  if (view !== 'chats' && window.innerWidth <= 832) shell.setMobilePane('list');
+  if (view !== 'chats' && isMobileLayout()) shell.setMobilePane('list');
 }
 
 async function openConversation(id) {
@@ -611,8 +628,8 @@ function wireKeyboard() {
       return;
     }
 
-    // Esc 在窄屏从会话返回列表
-    if (e.key === 'Escape' && window.innerWidth <= 832 && state.mobilePane === 'thread') {
+    // Esc 在手机布局下从会话返回列表
+    if (e.key === 'Escape' && isMobileLayout() && state.mobilePane === 'thread') {
       const typing = document.activeElement?.tagName === 'TEXTAREA';
       if (!typing) shell.setMobilePane('list');
       return;
