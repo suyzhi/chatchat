@@ -88,8 +88,19 @@ export const config = {
   secret: process.env.SESSION_SECRET || randomBytes(32).toString('hex'),
   secretIsEphemeral: !process.env.SESSION_SECRET,
 
-  /** 反向代理后面要信任的跳数，用于拿真实 IP */
-  trustProxy: int(process.env.TRUST_PROXY, 1),
+  /**
+   * 反向代理后面要信任的跳数，用于拿真实 IP。
+   *
+   * 默认 0（不信任 X-Forwarded-For）是刻意的「安全默认」：只要这个进程
+   * 能直接从外面访问到，客户端就能自己写 X-Forwarded-For，把 req.ip 换成
+   * 任意值 —— 登录限流、注册限流全都按这个值分桶，于是每换一个 IP 就换一个
+   * 桶，爆破等于没有限流。
+   *
+   * 确实在反向代理后面（docker compose + Caddy、或者 nginx 反代）才设成 1，
+   * 这时候 XFF 由反代覆写，伪造不了。docker-compose.yml 已经替你设成 1 了；
+   * 复制 .env.example 生成的 .env 里默认也是 1。
+   */
+  trustProxy: int(process.env.TRUST_PROXY, 0),
   /** 生产环境（HTTPS）下 cookie 加 Secure。留空则按请求协议自动判断。 */
   cookieSecure: process.env.COOKIE_SECURE === undefined ? null : bool(process.env.COOKIE_SECURE, false),
 

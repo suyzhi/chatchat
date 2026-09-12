@@ -324,7 +324,8 @@ export function createList(headHost, bodyHost, handlers) {
 
     const subs = {
       chats: `${conversations().length} 个会话  ·  ${state.presence.size} 人在线`,
-      contacts: `${state.contacts.size} 位联系人  ·  ${state.users.size - 1} 人可用`,
+      // state.users 里本来就不含自己（装载时跳过了 isSelf 那条），不要再减一
+      contacts: `${state.contacts.size} 位联系人  ·  ${state.users.size} 人可用`,
       search: '在你的全部会话里查找',
     };
 
@@ -349,36 +350,44 @@ export function createList(headHost, bodyHost, handlers) {
 
   /* ---------------- 搜索栏 ---------------- */
 
+  const clearBtn = h(
+    'button.icon-btn.icon-btn--sm',
+    {
+      type: 'button',
+      'aria-label': '清空搜索',
+      hidden: true,
+      style: { position: 'absolute', right: '0.2rem' },
+      onClick: () => {
+        searchInput.value = '';
+        query = '';
+        searchResults = null;
+        syncClear();
+        renderBody();
+        searchInput.dispatchEvent(new Event('input'));
+      },
+    },
+    icon('x', { size: 13 }),
+  );
+
+  /**
+   * 「清空」按钮的显隐。
+   * 它一开始是按空输入框建的（hidden: true），之后必须跟着输入内容走，
+   * 否则这个按钮永远不出现。
+   */
+  function syncClear() {
+    clearBtn.hidden = query.length === 0;
+  }
+
   searchInput.addEventListener('input', () => {
     query = searchInput.value;
+    syncClear();
     if (view === 'search') runSearch(query);
     else renderBody();
   });
 
   const searchBar = h(
     'div.searchbar',
-    h(
-      'div.searchbar__wrap',
-      icon('magnifying-glass', { size: 15 }),
-      searchInput,
-      h(
-        'button.icon-btn.icon-btn--sm',
-        {
-          type: 'button',
-          'aria-label': '清空搜索',
-          hidden: !query,
-          style: { position: 'absolute', right: '0.2rem' },
-          onClick: () => {
-            searchInput.value = '';
-            query = '';
-            searchResults = null;
-            renderBody();
-            searchInput.dispatchEvent(new Event('input'));
-          },
-        },
-        icon('x', { size: 13 }),
-      ),
-    ),
+    h('div.searchbar__wrap', icon('magnifying-glass', { size: 15 }), searchInput, clearBtn),
   );
 
   /* ---------------- 订阅 ---------------- */
@@ -414,12 +423,19 @@ export function createList(headHost, bodyHost, handlers) {
   return {
     searchBar,
     setView(next, { focusSearch = false } = {}) {
+      const changed = view !== next;
       view = next;
       if (next !== 'search') {
         query = '';
         searchInput.value = '';
         searchResults = null;
+      } else if (changed && query.trim()) {
+        // 在会话列表里输入的关键词是「筛名字」，切到搜索视图后语义变成
+        // 「搜正文」。不重跑一次的话，这儿会顶着一句「没搜到」——
+        // 其实根本没搜过。
+        runSearch(query);
       }
+      syncClear();
       render();
       if (focusSearch || next === 'search') {
         setTimeout(() => searchInput.focus({ preventScroll: true }), 30);

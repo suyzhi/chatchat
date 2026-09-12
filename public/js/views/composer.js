@@ -10,7 +10,7 @@
 import { h, fill, toast, copyText } from '../dom.js';
 import { icon } from '../icon.js';
 import { api } from '../api.js';
-import { state, bus, trackUpload, updateUpload, dropUpload, uploadsOf } from '../store.js';
+import { state, bus, trackUpload, updateUpload, dropUpload } from '../store.js';
 import { bytes, duration } from '../format.js';
 import { iconButton, setProgress, progressBar } from './parts.js';
 import { openMenu } from '../overlays.js';
@@ -106,40 +106,67 @@ export function createComposer(host, handlers) {
   /* ------------------------------------------------------------------ */
 
   const tray = h('div.attach-tray', { hidden: true });
-  /** @type {Map<string, {file: File, uploaded: object|null, task: object}>} */
+  /**
+   * 待发送的附件。每条都记着自己是哪个会话的：
+   * 输入区只有一个，但会话是切来切去的，不记来源的话，切走再回来
+   * 那条正在传的附件就凭空消失了（上传还在后台跑，传完却没人接手）。
+   * @type {Map<string, {convId: number, file: File, uploaded: object|null, meta?: object, task: object, thumbUrl?: string}>}
+   */
   const pending = new Map();
 
+  /** 当前会话的附件。别的一律不显示、不参与发送 */
+  const entriesFor = (convId) =>
+    convId ? [...pending.entries()].filter(([, v]) => v.convId === convId) : [];
+
   const readyAttachments = () =>
-    [...pending.entries()].filter(([, v]) => v.uploaded).map(([id, v]) => ({ id, ...v }));
+    entriesFor(handlers.getConversationId())
+      .filter(([, v]) => v.uploaded)
+      .map(([id, v]) => ({ id, ...v }));
+
+  /** 缩略图 URL 每条只建一次：之前每重绘一次就再造一个，老的那个再也回收不了 */
+  function thumbUrlFor(entry) {
+    if (!entry.thumbUrl) entry.thumbUrl = URL.createObjectURL(entry.file);
+    return entry.thumbUrl;
+  }
+
+  function forgetEntry(id) {
+    const entry = pending.get(id);
+    if (entry?.thumbUrl) URL.revokeObjectURL(entry.thumbUrl);
+    pending.delete(id);
+  }
+
+  /** 清掉某个会话的附件；不传就清全部 */
+  function clearPending(convId) {
+    for (const [id, entry] of [...pending]) {
+      if (convId === undefined || entry.convId === convId) forgetEntry(id);
+    }
+  }
+
+  /** 上传中那行状态文字。单独抽出来是为了能就地改，不用整块重绘 */
+  function uploadLabel(entry) {
+    if (entry.task.error) return `失败：${entry.task.error}`;
+    if (entry.uploaded) return `就绪 · ${bytes(entry.file.size)}`;
+    const pct = Math.round((entry.task.ratio || 0) * 100);
+    return `${entry.task.phase === 'merge' ? '正在合并' : '上传中'} ${pct}%`;
+  }
 
   function renderTray() {
-    const items = [...pending.entries()];
+    const items = entriesFor(handlers.getConversationId());
     tray.hidden = items.length === 0;
     fill(
       tray,
       ...items.map(([id, entry]) => {
-        const chip = h(
+        const labelEl = h('div.attach-chip__meta', uploadLabel(entry));
+        entry.labelEl = labelEl;
+        return h(
           'div.attach-chip',
           entry.file.type.startsWith('image/')
-            ? h('img.attach-chip__thumb', {
-                src: URL.createObjectURL(entry.file),
-                alt: '',
-                onLoad: (e) => URL.revokeObjectURL(e.target.src),
-              })
+            ? h('img.attach-chip__thumb', { src: thumbUrlFor(entry), alt: '' })
             : h('span.attach-chip__thumb', { style: { display: 'grid', placeItems: 'center' } }, icon('file', { size: 15 })),
           h(
             'div.attach-chip__main',
             h('div.attach-chip__name', { title: entry.file.name }, entry.file.name),
-            h(
-              'div.attach-chip__meta',
-              entry.task.error
-                ? `失败：${entry.task.error}`
-                : entry.uploaded
-                  ? `就绪 · ${bytes(entry.file.size)}`
-                  : `${entry.task.phase === 'merge' ? '正在合并' : '上传中'} ${Math.round(
-                      (entry.task.ratio || 0) * 100,
-                    )}%`,
-            ),
+            labelEl,
             !entry.uploaded && !entry.task.error ? entry.task.bar : null,
           ),
           h(
@@ -149,8 +176,8 @@ export function createComposer(host, handlers) {
               'aria-label': '移除附件',
               onClick: () => {
                 entry.task.controller?.abort();
-                dropUpload(handlers.getConversationId(), id);
-                pending.delete(id);
+                dropUpload(entry.convId, id);
+                forgetEntry(id);
                 renderTray();
                 refreshSendState();
               },
@@ -158,7 +185,6 @@ export function createComposer(host, handlers) {
             icon('x', { size: 13 }),
           ),
         );
-        return chip;
       }),
     );
   }
@@ -180,7 +206,7 @@ export function createComposer(host, handlers) {
       controller,
       bar: progressBar(0),
     };
-    pending.set(id, { file, uploaded: null, task });
+    pending.set(id, { convId, file, uploaded: null, task });
     trackUpload(convId, task);
     renderTray();
     refreshSendState();
@@ -189,13 +215,19 @@ export function createComposer(host, handlers) {
       signal: controller.signal,
       onPhase: (phase) => {
         task.phase = phase;
+        // 只发一次事件就够：输入区自己订阅了 upload:changed，会重绘一次
         updateUpload(convId, task);
-        renderTray();
       },
       onProgress: ({ ratio }) => {
+        /*
+         * 进度是高频事件（每个分块都来一次）。这里只动那一条状态文字和
+         * 进度条，绝不整块重绘 —— 重绘会连带重建缩略图的 blob URL，
+         * 几个 G 的文件传下来就是上千次 DOM 重建加上千个回收不掉的 URL。
+         */
         task.ratio = ratio;
         setProgress(task.bar, ratio);
-        updateUpload(convId, task);
+        const entry = pending.get(id);
+        if (entry?.labelEl?.isConnected) entry.labelEl.textContent = uploadLabel(entry);
       },
     })
       .then(({ file: uploaded, meta }) => {
@@ -562,28 +594,36 @@ export function createComposer(host, handlers) {
       controller: new AbortController(),
       bar: progressBar(0),
     };
-    pending.set(id, { file, uploaded: null, task, meta: localMeta });
+    pending.set(id, { convId, file, uploaded: null, task, meta: localMeta });
     renderTray();
 
     try {
       const { file: uploaded, meta } = await uploadFile(file, {
         signal: task.controller.signal,
-        onProgress: ({ ratio }) => setProgress(task.bar, ratio),
-      });
-      pending.delete(id);
-      renderTray();
-      const probe = await probeAudio(file).catch(() => ({}));
-      await sendMessage({
-        kind: 'audio',
-        fileId: uploaded.id,
-        meta: {
-          durationMs: probe.durationMs || durationMs,
-          waveform: probe.waveform || meta?.waveform || null,
+        onProgress: ({ ratio }) => {
+          task.ratio = ratio;
+          setProgress(task.bar, ratio);
         },
       });
+      forgetEntry(id);
+      renderTray();
+      const probe = await probeAudio(file).catch(() => ({}));
+      // 明确发给录这条语音时所在的那个会话：上传可能花几秒，
+      // 这期间用户完全可能已经点开另一个会话了。
+      await sendMessage(
+        {
+          kind: 'audio',
+          fileId: uploaded.id,
+          meta: {
+            durationMs: probe.durationMs || durationMs,
+            waveform: probe.waveform || meta?.waveform || null,
+          },
+        },
+        convId,
+      );
     } catch (err) {
       if (err instanceof UploadCancelled || err.name === 'AbortError') return;
-      pending.delete(id);
+      forgetEntry(id);
       renderTray();
       toast(`语音发送失败：${err.message || '未知错误'}`, { tone: 'error' });
     }
@@ -593,10 +633,15 @@ export function createComposer(host, handlers) {
   /* 发送                                                                */
   /* ------------------------------------------------------------------ */
 
-  async function sendMessage(payload) {
-    const convId = handlers.getConversationId();
-    if (!convId) return null;
-    const res = await api.send(convId, payload);
+  /**
+   * @param {object} payload
+   * @param {number} [targetId] 目标会话。默认是「当前打开的会话」，
+   *   但凡发送前有过 await 的调用方都必须把会话 id 显式传进来 ——
+   *   否则用户在这段时间里切走，消息就发到别人那儿去了。
+   */
+  async function sendMessage(payload, targetId = handlers.getConversationId()) {
+    if (!targetId) return null;
+    const res = await api.send(targetId, payload);
     // 服务端会把消息推给所有成员（包括自己），这里不重复插入
     return res.message;
   }
@@ -607,7 +652,7 @@ export function createComposer(host, handlers) {
 
     const text = input.value.trim();
     const attachments = readyAttachments();
-    const stillUploading = [...pending.values()].filter((v) => !v.uploaded && !v.task.error);
+    const stillUploading = entriesFor(convId).filter(([, v]) => !v.uploaded && !v.task.error);
 
     /* 编辑模式 */
     if (editing.id) {
@@ -638,20 +683,24 @@ export function createComposer(host, handlers) {
 
     try {
       if (attachments.length === 0) {
-        await sendMessage({ kind: 'text', body: text, replyTo });
+        await sendMessage({ kind: 'text', body: text, replyTo }, convId);
       } else {
         // 多附件：第一件带正文，其余作为跟进消息
+        // 循环里每一件都要等上一次发完，所以目标会话必须显式钉住
         for (let i = 0; i < attachments.length; i += 1) {
           const att = attachments[i];
           const kind = att.uploaded.kind;
-          await sendMessage({
-            kind,
-            body: i === 0 ? text : '',
-            fileId: att.uploaded.id,
-            meta: att.meta || null,
-            replyTo: i === 0 ? replyTo : null,
-          });
-          pending.delete(att.id);
+          await sendMessage(
+            {
+              kind,
+              body: i === 0 ? text : '',
+              fileId: att.uploaded.id,
+              meta: att.meta || null,
+              replyTo: i === 0 ? replyTo : null,
+            },
+            convId,
+          );
+          forgetEntry(att.id);
         }
         renderTray();
       }
@@ -775,9 +824,10 @@ export function createComposer(host, handlers) {
   });
 
   const offs = [
-    bus.on('conversation:removed', () => {
-      // 会话没了就清空草稿区
-      pending.clear();
+    bus.on('conversation:removed', (conversationId) => {
+      // 只有当前会话没了才需要清草稿区；别的会话被移除不该动我这儿正在写的东西
+      if (conversationId !== handlers.getConversationId()) return;
+      clearPending(conversationId);
       cancelEdit();
       cancelReply();
       renderTray();
@@ -799,17 +849,31 @@ export function createComposer(host, handlers) {
     cancelReply,
     focus: () => input.focus(),
     refresh: refreshSendState,
-    /** 会话切换时重置 */
+    /**
+     * 会话切换时重置草稿区。
+     *
+     * 只清「文字/回复/编辑」这些跟输入框绑定的东西。附件不清：它们各自
+     * 记着自己是哪个会话的，切走时只是不显示，切回来还在；正在传的也让它
+     * 继续传完。以前这里一律 clear()，结果是切一下会话，传到一半的大文件
+     * 就从界面上消失了，传完也没人接手（文件留在服务器上，消息永远发不出去）。
+     */
     reset() {
       cancelEdit();
       cancelReply();
-      pending.clear();
       renderTray();
       refreshSendState();
     },
     destroy() {
       offs.forEach((off) => off?.());
       cancelRecording();
+      for (const entry of pending.values()) {
+        try {
+          entry.task.controller?.abort();
+        } catch {
+          /* 已经结束了 */
+        }
+      }
+      clearPending();
     },
     get editing() {
       return editing;

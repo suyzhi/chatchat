@@ -65,6 +65,24 @@ let list = null;
 let thread = null;
 let composer = null;
 let notificationsAsked = false;
+/** 登录页是不是已经渲染过了，见 showAuth */
+let authRendered = false;
+
+/*
+ * 全局监听与定时器的解绑函数。
+ *
+ * window / document 上的监听和事件总线上的订阅不属于任何视图，teardown 里
+ * 那四个 destroy() 管不到它们。会话过期后重新登录会再跑一遍 bootApp，
+ * 不在这里显式拆掉的话，每重新登录一次就多挂一套：同一条推送被处理两遍，
+ * 「正在输入」的定时器也叠一层。
+ */
+const globalCleanups = [];
+function keepAlive(cleanup) {
+  if (typeof cleanup === 'function') globalCleanups.push(cleanup);
+  return cleanup;
+}
+/** 订阅事件总线，并登记解绑函数 */
+const onBus = (event, fn) => keepAlive(bus.on(event, fn));
 
 /* ------------------------------------------------------------------ */
 /* 启动                                                                */
@@ -128,6 +146,10 @@ function showFatal(title, detail) {
 }
 
 function showAuth({ reason } = {}) {
+  // 401（HTTP）和 4401（WebSocket）会几乎同时触发，两条路径都会走到这里。
+  // 不拦一下就会把登录页连着重绘两次，提示条也弹两条。
+  if (authRendered) return;
+  authRendered = true;
   bootEl.hidden = true;
   rootEl.hidden = false;
   renderAuth(rootEl, {
@@ -138,9 +160,9 @@ function showAuth({ reason } = {}) {
       if (opts?.becameAdmin) {
         toast('你是这台服务器上的第一个账号，已获得管理员身份', { timeout: 6000, tone: 'ok' });
       }
-      if (reason) toast(reason);
     },
   });
+  // 只在这里弹一次；登录成功后不再重复（原因在进登录页时就已经说过了）
   if (reason) toast(reason);
 }
 
@@ -149,6 +171,7 @@ function showAuth({ reason } = {}) {
 /* ------------------------------------------------------------------ */
 
 async function bootApp() {
+  authRendered = false;
   rootEl.hidden = false;
   bootEl.hidden = true;
   rootEl.className = '';
@@ -173,10 +196,6 @@ async function bootApp() {
   }
   state.conversations.clear();
   for (const c of convRes.conversations) upsertConversation(c);
-
-  // 我的资料也用最新的
-  const meFresh = state.users.get(state.me.id);
-  void meFresh;
 
   shell = renderShell(rootEl, {
     onNavigate: (view) => navigate(view),
@@ -248,9 +267,17 @@ async function bootApp() {
 
 function teardown() {
   disconnectSocket();
+  shell?.destroy();
   thread?.destroy();
   composer?.destroy();
   list?.destroy();
+  for (const off of globalCleanups.splice(0)) {
+    try {
+      off();
+    } catch (err) {
+      console.error('[teardown] 清理监听失败', err);
+    }
+  }
   shell = null;
   list = null;
   thread = null;
@@ -323,11 +350,8 @@ function openMeMenu(anchor) {
   });
 }
 
-/** 联系人列表里点一个人：先给菜单，再决定是聊天还是看资料 */
+/** 联系人列表里点一个人：直接开资料卡，里面已经有「发消息」按钮 */
 function openContactMenu(user) {
-  const anchor = { getBoundingClientRect: () => ({ bottom: 0, top: 0, left: 0, right: 0 }) };
-  void anchor;
-  // 直接开资料卡更直接：里面已经有「发消息」按钮
   openProfile(user.id, dialogCtx);
 }
 
@@ -351,37 +375,37 @@ const dialogCtx = {
 /* ------------------------------------------------------------------ */
 
 function wireRealtime() {
-  bus.on('connection:changed', (status) => {
+  onBus('connection:changed', (status) => {
     state.connection = status;
     renderConnBar();
   });
 
-  bus.on('auth:expired', () => {
+  onBus('auth:expired', () => {
     teardown();
     reset();
     showAuth({ reason: '登录状态已过期，请重新登录' });
   });
 
-  bus.on('ws:ready', ({ online }) => {
+  onBus('ws:ready', ({ online }) => {
     state.presence.clear();
     for (const id of online || []) setPresence(id, true);
     bus.emit('conversations:changed');
   });
 
-  bus.on('ws:presence', ({ userId, online }) => setPresence(userId, online));
+  onBus('ws:presence', ({ userId, online }) => setPresence(userId, online));
 
-  bus.on('ws:message:new', ({ message, conversation }) => {
+  onBus('ws:message:new', ({ message, conversation }) => {
     if (conversation) upsertConversation(conversation);
     upsertMessage(message);
     onIncoming(message);
   });
 
-  bus.on('ws:message:update', (data) => {
+  onBus('ws:message:update', (data) => {
     if (data.message) upsertMessage(data.message);
     if (data.conversation) upsertConversation(data.conversation);
   });
 
-  bus.on('ws:conversation:new', async (data) => {
+  onBus('ws:conversation:new', async (data) => {
     // 定向推送里带了完整数据
     const conv = data?.data ?? data?.conversation?.data ?? data;
     if (conv?.id) {
@@ -403,19 +427,19 @@ function wireRealtime() {
     }
   });
 
-  bus.on('ws:conversation:update', ({ conversation }) => {
+  onBus('ws:conversation:update', ({ conversation }) => {
     if (!conversation) return;
     // 详情接口返回的是针对某个人的视图，这里只取自己的那一份
     if (conversation.peer || conversation.myRole) upsertConversation(conversation);
   });
 
-  bus.on('ws:conversation:removed', ({ conversationId }) => {
+  onBus('ws:conversation:removed', ({ conversationId }) => {
     removeConversation(conversationId);
     if (thread?.activeId === conversationId) thread.close();
     toast('你已不在这个会话里了');
   });
 
-  bus.on('ws:read', ({ conversationId, userId, messageId }) => {
+  onBus('ws:read', ({ conversationId, userId, messageId }) => {
     const conv = state.conversations.get(conversationId);
     if (!conv) return;
     if (conv.type === 'dm') {
@@ -430,34 +454,35 @@ function wireRealtime() {
     }
   });
 
-  bus.on('ws:typing', ({ conversationId, userId, until }) => {
+  onBus('ws:typing', ({ conversationId, userId, until }) => {
     noteTyping(conversationId, userId, until);
   });
 
-  bus.on('ws:sync', ({ conversations: list_, online }) => {
+  onBus('ws:sync', ({ conversations: list_, online }) => {
     for (const c of list_ || []) upsertConversation(c);
     state.presence.clear();
     for (const id of online || []) setPresence(id, true);
     bus.emit('conversations:changed');
   });
 
-  bus.on('conversation:new', (conv) => {
+  onBus('conversation:new', (conv) => {
     if (conv) upsertConversation(conv);
   });
 
-  bus.on('contacts:changed', () => {
+  onBus('contacts:changed', () => {
     if (list.view === 'contacts') list.refresh();
   });
 
-  bus.on('me:changed', () => {
+  onBus('me:changed', () => {
     shell?.refreshMe();
   });
 
   // 输入中的状态会过期：定期清理并重绘，否则「正在输入」会一直挂着
-  setInterval(() => {
+  const typingTimer = setInterval(() => {
     pruneTyping();
     if (thread?.activeId) thread.refresh();
   }, 2000);
+  keepAlive(() => clearInterval(typingTimer));
 }
 
 /** 连接中断时在顶部挂一条提示 */
@@ -498,10 +523,14 @@ function wireNotifications() {
   };
   window.addEventListener('pointerdown', ask, { once: true });
   window.addEventListener('keydown', ask, { once: true });
+  keepAlive(() => {
+    window.removeEventListener('pointerdown', ask);
+    window.removeEventListener('keydown', ask);
+  });
 
-  bus.on('presence:changed', updateTitle);
-  bus.on('conversations:changed', updateTitle);
-  bus.on('message:added', updateTitle);
+  onBus('presence:changed', updateTitle);
+  onBus('conversations:changed', updateTitle);
+  onBus('message:added', updateTitle);
 }
 
 function onIncoming(message) {
@@ -581,22 +610,22 @@ function wireGlobalDrop() {
     dropEl.hidden = true;
   };
 
-  window.addEventListener('dragenter', (e) => {
+  const onDragEnter = (e) => {
     if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return;
     e.preventDefault();
     depth += 1;
     show();
-  });
-  window.addEventListener('dragover', (e) => {
+  };
+  const onDragOver = (e) => {
     if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-  });
-  window.addEventListener('dragleave', () => {
+  };
+  const onDragLeave = () => {
     depth -= 1;
     if (depth <= 0) hide();
-  });
-  window.addEventListener('drop', (e) => {
+  };
+  const onDrop = (e) => {
     if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return;
     e.preventDefault();
     hide();
@@ -610,6 +639,19 @@ function wireGlobalDrop() {
         dataTransfer: e.dataTransfer,
       }),
     );
+  };
+
+  window.addEventListener('dragenter', onDragEnter);
+  window.addEventListener('dragover', onDragOver);
+  window.addEventListener('dragleave', onDragLeave);
+  window.addEventListener('drop', onDrop);
+  keepAlive(() => {
+    window.removeEventListener('dragenter', onDragEnter);
+    window.removeEventListener('dragover', onDragOver);
+    window.removeEventListener('dragleave', onDragLeave);
+    window.removeEventListener('drop', onDrop);
+    depth = 0;
+    dropEl.hidden = true;
   });
 }
 
@@ -618,7 +660,7 @@ function wireGlobalDrop() {
 /* ------------------------------------------------------------------ */
 
 function wireKeyboard() {
-  window.addEventListener('keydown', (e) => {
+  const onKeydown = (e) => {
     const mod = e.ctrlKey || e.metaKey;
 
     // Ctrl/Cmd + K 打开搜索
@@ -627,6 +669,8 @@ function wireKeyboard() {
       navigate('search');
       return;
     }
+
+    if (!shell) return;
 
     // Esc 在手机布局下从会话返回列表
     if (e.key === 'Escape' && isMobileLayout() && state.mobilePane === 'thread') {
@@ -639,25 +683,38 @@ function wireKeyboard() {
     if (e.key === 'Escape' && state.mobilePane === 'thread' && document.activeElement === document.body) {
       shell.setMobilePane('list');
     }
-  });
+  };
 
   // 页面重新可见 / 网络恢复时立刻重连
-  document.addEventListener('visibilitychange', () => {
+  const onVisibility = () => {
     if (document.visibilityState === 'visible') {
       kick();
       if (thread?.activeId) thread.refresh();
     }
+  };
+  const onOnline = () => kick();
+  const onOffline = () => bus.emit('connection:changed', 'offline');
+
+  window.addEventListener('keydown', onKeydown);
+  document.addEventListener('visibilitychange', onVisibility);
+  window.addEventListener('online', onOnline);
+  window.addEventListener('offline', onOffline);
+  keepAlive(() => {
+    window.removeEventListener('keydown', onKeydown);
+    document.removeEventListener('visibilitychange', onVisibility);
+    window.removeEventListener('online', onOnline);
+    window.removeEventListener('offline', onOffline);
   });
-  window.addEventListener('online', () => kick());
-  window.addEventListener('offline', () => bus.emit('connection:changed', 'offline'));
 
   // 移动端软键盘弹出时把消息流滚到底
   if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', () => {
+    const onViewportResize = () => {
       if (thread?.activeId && isNearBottom(thread.scrollHost, 400)) {
         thread.scrollHost.scrollTop = thread.scrollHost.scrollHeight;
       }
-    });
+    };
+    window.visualViewport.addEventListener('resize', onViewportResize);
+    keepAlive(() => window.visualViewport.removeEventListener('resize', onViewportResize));
   }
 }
 

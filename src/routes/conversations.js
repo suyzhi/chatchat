@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { db, now, conversationById, isMember, memberIds, addMember, findOrCreateDM, userById } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { conversationSummary } from '../conv.js';
-import { publicUser } from '../serialize.js';
+import { publicUser, listMessages } from '../serialize.js';
 import { sendToUsers } from '../presence.js';
 import { wrap, bad, forbidden, notFound, str, optStr, intId, HttpError } from '../http.js';
 import { rateLimiter } from '../util.js';
@@ -36,6 +36,34 @@ function mustGroupAdmin(conv, userId) {
   if (me?.role !== 'owner' && me?.role !== 'admin' && !userById(userId)?.is_admin) {
     throw forbidden('只有群主和管理员能做这个操作');
   }
+}
+
+/**
+ * 群主离开之后，把群主转给还在群里、加入最早的那个人。
+ *
+ * 不转会把这个群永久卡死：mustGroupAdmin 只认 owner / admin / 站点管理员，
+ * 而 role='admin' 全项目没有任何地方会写、也没有提权接口 —— 于是改名、
+ * 拉人、踢人全部 403，谁都救不回来。
+ *
+ * @returns {number|null} 新群主的 id；没有可转的人（群空了）返回 null
+ */
+function transferOwnershipIfNeeded(conversationId) {
+  const stillOwned = db
+    .prepare("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND role = 'owner' LIMIT 1")
+    .get(conversationId);
+  if (stillOwned) return null;
+  const next = db
+    .prepare(
+      `SELECT user_id FROM conversation_members
+        WHERE conversation_id = ?
+        ORDER BY joined_at ASC, user_id ASC LIMIT 1`,
+    )
+    .get(conversationId);
+  if (!next) return null;
+  db.prepare(
+    "UPDATE conversation_members SET role = 'owner' WHERE conversation_id = ? AND user_id = ?",
+  ).run(conversationId, next.user_id);
+  return next.user_id;
 }
 
 /* ------------------------------------------------------------------ */
@@ -193,20 +221,41 @@ conversationsRouter.post(
 
     const raw = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
     const ids = [...new Set(raw.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n > 0))];
-    const added = [];
     const t = now();
-    for (const uid of ids) {
-      if (!userById(uid) || isMember(conv.id, uid)) continue;
-      addMember(conv.id, uid, 'member');
-      added.push(uid);
+    const added = db.transaction(() => {
+      const out = [];
+      let lastId = 0;
+      for (const uid of ids) {
+        const person = userById(uid);
+        if (!person || isMember(conv.id, uid)) continue;
+        addMember(conv.id, uid, 'member');
+        out.push(uid);
+        lastId = Number(
+          db
+            .prepare(
+              `INSERT INTO messages (conversation_id, sender_id, kind, body, created_at)
+               VALUES (?, ?, 'system', ?, ?)`,
+            )
+            .run(conv.id, req.user.id, `${person.display_name} 加入了群聊`, t).lastInsertRowid,
+        );
+      }
+      if (out.length === 0) return out;
+
+      /*
+       * 和「建群」那条路径保持一致：被拉进来的人不该一进群就顶着满屏红点。
+       * 之前这里没写 last_read_message_id，新成员的默认值是 0，
+       * 于是他要替进群之前的所有历史消息背一次未读。
+       */
+      const marks = out.map(() => '?').join(',');
       db.prepare(
-        `INSERT INTO messages (conversation_id, sender_id, kind, body, created_at)
-         VALUES (?, ?, 'system', ?, ?)`,
-      ).run(conv.id, req.user.id, `${userById(uid).display_name} 加入了群聊`, t);
-    }
+        `UPDATE conversation_members SET last_read_message_id = ?
+          WHERE conversation_id = ? AND user_id IN (${marks})`,
+      ).run(lastId, conv.id, ...out);
+      db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(t, conv.id);
+      return out;
+    })();
     if (added.length === 0) throw bad('没有可添加的成员');
 
-    db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(t, conv.id);
     const conv2 = conversationById(conv.id);
     for (const uid of memberIds(conv.id)) {
       sendToUsers([uid], { t: 'conversation:update', conversation: summary(conv2, uid) });
@@ -254,6 +303,8 @@ conversationsRouter.delete(
       );
       db.prepare('UPDATE conversations SET last_message_at = ? WHERE id = ?').run(t, conv.id);
     }
+    // 群主走了（或自己被移除）就把群主交出去，别让这个群以后没人能管
+    transferOwnershipIfNeeded(conv.id);
 
     sendToUsers([targetId], { t: 'conversation:removed', conversationId: conv.id });
     const conv2 = conversationById(conv.id);
@@ -287,6 +338,8 @@ conversationsRouter.post(
       conv.id,
       req.user.id,
     );
+    // 退群的就是群主的话，把群主交给群里剩下最早加入的那个人
+    transferOwnershipIfNeeded(conv.id);
 
     const conv2 = conversationById(conv.id);
     if (conv2) {
@@ -306,10 +359,17 @@ conversationsRouter.post(
   '/conversations/:id/read',
   wrap(async (req, res) => {
     const conv = mustMember(req);
+    // 已读位置只允许落在本会话的消息区间里。原样接受任意 id 的话，
+    // 一个乱序的客户端（或者故意构造的请求）就能把别的会话、甚至还不存在的
+    // 消息 id 写成这里的「已读到哪」，未读数会直接算错。
+    const maxId = db
+      .prepare('SELECT COALESCE(MAX(id), 0) AS n FROM messages WHERE conversation_id = ?')
+      .get(conv.id).n;
     // 允许不传 messageId，表示「全部标记为已读」
-    const upto = req.body?.messageId
-      ? intId(req.body.messageId, '消息')
-      : db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM messages WHERE conversation_id = ?').get(conv.id).n;
+    const upto = Math.min(
+      req.body?.messageId ? intId(req.body.messageId, '消息') : maxId,
+      maxId,
+    );
 
     const cur = db
       .prepare('SELECT last_read_message_id FROM conversation_members WHERE conversation_id = ? AND user_id = ?')
@@ -397,10 +457,12 @@ conversationsRouter.get(
   '/conversations/:id/messages',
   wrap(async (req, res) => {
     const conv = mustMember(req);
-    const { listMessages } = await import('../serialize.js');
     const before = req.query.before ? intId(req.query.before, '游标') : undefined;
     const after = req.query.after ? intId(req.query.after, '游标') : undefined;
-    const limit = req.query.limit ? Math.min(200, Math.max(1, Number(req.query.limit) || 50)) : 50;
+    // 一定要取整：limit=2.5 会一路进到 SQL 的 LIMIT，SQLite 直接报
+    // SQLITE_MISMATCH，一个手写的查询串就能把接口变成 500。
+    const raw = Number.parseInt(req.query.limit ?? '', 10);
+    const limit = Number.isSafeInteger(raw) ? Math.min(200, Math.max(1, raw)) : 50;
     const { messages, hasMore } = listMessages(conv.id, { before, after, limit });
     res.json({ messages, hasMore, conversation: summary(conv, req.user.id) });
   }),

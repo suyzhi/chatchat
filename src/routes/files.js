@@ -42,6 +42,20 @@ filesRouter.get(
     res.setHeader('Content-Type', file.mime || 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
 
+    /*
+     * SVG 是唯一「既是图片、又能当文档跑」的类型。放进 <img> 里没事，
+     * 但有人直接把 /api/files/<id> 当页面打开时，它里面的 <script> 就运行在
+     * 本站源上。这里给它单独上一道最严的 CSP（会覆盖全局那条），
+     * 脚本、表单、外部请求一律掐掉，只留绘制需要的样式和内嵌图片。
+     * 走 <img> 加载时这道头根本用不上，所以预览不受影响。
+     */
+    if (/svg/i.test(file.mime || '')) {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+      );
+    }
+
     // 非图片/音频/视频一律强制下载；显式带 download=1 也强制下载
     const forceDownload = req.query.download === '1';
     const inline = isInlineSafe(file.kind) && !forceDownload;

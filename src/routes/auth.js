@@ -22,10 +22,12 @@ import {
   sessionCookie,
   clearCookie,
   requireAuth,
-  throttleKey,
+  clientKey,
+  throttleKeys,
   isThrottled,
   noteFailure,
   clearFailures,
+  MAX_ATTEMPTS_PER_SOURCE,
 } from '../auth.js';
 import { publicUser } from '../serialize.js';
 import { wrap, bad, forbidden, str, optStr, validateUsername, validatePassword, HttpError } from '../http.js';
@@ -59,8 +61,9 @@ authRouter.get('/config', (req, res) => {
 authRouter.post(
   '/register',
   wrap(async (req, res) => {
-    const ip = req.ip || 'unknown';
-    if (!registerLimit(ip)) throw new HttpError(429, '注册太频繁了，请稍后再试', 'rate_limited');
+    // 注册限流按「不可伪造的来源」算，理由同登录：只看 req.ip 的话，
+    // 直接暴露部署下客户端换个 X-Forwarded-For 就能无限注册。
+    if (!registerLimit(clientKey(req))) throw new HttpError(429, '注册太频繁了，请稍后再试', 'rate_limited');
 
     const state = registrationState();
     if (!state.open) throw forbidden(state.reason || '站点已关闭注册');
@@ -84,31 +87,48 @@ authRouter.post(
     if (userByUsername(username)) throw bad('这个用户名已经有人用了');
 
     const t = now();
+    // 先把哈希算出来：scrypt 是异步的，不能放在同步事务里面
+    const passwordHash = await hashPassword(password);
+    const email = optStr(req.body?.email, '邮箱', { max: 120 });
+
     let id;
+    let isAdmin;
     try {
-      const info = db
-        .prepare(
-          `INSERT INTO users (username, display_name, email, password_hash, is_admin, created_at, last_seen_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          username,
-          displayName,
-          optStr(req.body?.email, '邮箱', { max: 120 }),
-          await hashPassword(password),
-          first ? 1 : 0,
-          t,
-          t,
-        );
-      id = Number(info.lastInsertRowid);
+      /*
+       * 「是不是第一个用户」必须在写入的那一刻重新判定，而且判定和写入要
+       * 在同一个同步事务里。
+       *
+       * 上面那次 isFirstRun() 到这里的 INSERT 之间隔了一个 await，两个并发
+       * 注册会都看到「还没有任何用户」，于是都不需要邀请码、都拿到管理员。
+       * better-sqlite3 是同步的，事务里不会有别的请求插进来。
+       */
+      ({ id, isAdmin } = db.transaction(() => {
+        const stillFirst = isFirstRun();
+        if (
+          !stillFirst &&
+          !first &&
+          state.needsInvite &&
+          !inviteMatches(req.body?.inviteCode)
+        ) {
+          throw forbidden('邀请码不对');
+        }
+        const info = db
+          .prepare(
+            `INSERT INTO users (username, display_name, email, password_hash, is_admin, created_at, last_seen_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(username, displayName, email, passwordHash, stillFirst ? 1 : 0, t, t);
+        return { id: Number(info.lastInsertRowid), isAdmin: stillFirst };
+      })());
     } catch (err) {
+      if (err instanceof HttpError) throw err;
       if (String(err.message).includes('UNIQUE')) throw bad('这个用户名已经有人用了');
       throw err;
     }
 
-    const token = createSession(id, { userAgent: req.headers['user-agent'], ip });
+    const token = createSession(id, { userAgent: req.headers['user-agent'], ip: req.ip });
     res.setHeader('Set-Cookie', sessionCookie(token, req));
-    res.status(201).json({ user: publicUser(userById(id)), becameAdmin: first });
+    res.status(201).json({ user: publicUser(userById(id)), becameAdmin: isAdmin });
   }),
 );
 
@@ -119,8 +139,8 @@ authRouter.post(
     const password = String(req.body?.password ?? '');
     if (!username || !password) throw bad('请填写用户名和密码');
 
-    const key = throttleKey(req, username);
-    const wait = isThrottled(key);
+    const keys = throttleKeys(req, username);
+    const wait = Math.max(isThrottled(keys.user), isThrottled(keys.source));
     if (wait) throw new HttpError(429, `尝试次数过多，请 ${Math.ceil(wait / 60)} 分钟后再试`, 'rate_limited');
 
     const user = userByUsername(username);
@@ -130,11 +150,12 @@ authRouter.post(
       : await verifyPassword(password, 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAA');
 
     if (!user || !ok) {
-      noteFailure(key);
+      noteFailure(keys.user);
+      noteFailure(keys.source, MAX_ATTEMPTS_PER_SOURCE);
       throw new HttpError(401, '用户名或密码不对', 'bad_credentials');
     }
 
-    clearFailures(key);
+    clearFailures(keys.user);
     db.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').run(now(), user.id);
     const token = createSession(user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
     res.setHeader('Set-Cookie', sessionCookie(token, req));

@@ -527,9 +527,7 @@ export function createThread(headHost, scrollHost, footHost, handlers) {
     /* 状态行：我发的消息显示送达/已读 */
     let status = null;
     if (mine && msg.kind !== 'system') {
-      if (msg.kind === 'file' || msg.kind === 'image' || msg.kind === 'video' || msg.kind === 'audio') {
-        // 媒体消息的状态显示在气泡下方
-      }
+      // 群聊没有单个人的「已读到哪」，peerReadMessageId 是 null，这里就恒为已送达
       const read = (conv?.peerReadMessageId || 0) >= msg.id;
       status = h(
         'div.msg__status',
@@ -734,21 +732,29 @@ export function createThread(headHost, scrollHost, footHost, handlers) {
   let readTimer = null;
   function markRead(immediate = false) {
     if (!activeId) return;
-    const list = messagesOf(activeId);
+    // 会话 id 和「最后一条」必须一起定住。定时器是 400ms 之后才跑的，
+    // 这期间用户完全可能已经切到别的会话；那时再用 activeId 去发已读，
+    // 就会把 A 会话的消息 id 写进 B 会话的已读位置——B 的未读会被清掉，
+    // 对方还会收到一条莫名其妙的已读回执。
+    const convId = activeId;
+    const list = messagesOf(convId);
     const last = list[list.length - 1];
     if (!last) return;
-    const conv = state.conversations.get(activeId);
+    const conv = state.conversations.get(convId);
     if (conv && (conv.lastReadMessageId || 0) >= last.id) return;
 
     const run = () => {
+      readTimer = null;
       if (conv) {
         conv.lastReadMessageId = last.id;
         conv.unread = 0;
         bus.emit('conversation:changed', conv);
         bus.emit('conversations:changed');
       }
-      if (!sendRead(activeId, last.id)) {
-        api.markRead(activeId, last.id).catch(() => {});
+      // 报的是 convId 而不是「当前会话」：用户已经读到这儿了，
+      // 就算这 400ms 里切走了，这条回执也仍然是关于那个会话的。
+      if (!sendRead(convId, last.id)) {
+        api.markRead(convId, last.id).catch(() => {});
       }
     };
     clearTimeout(readTimer);
@@ -965,6 +971,8 @@ export function createThread(headHost, scrollHost, footHost, handlers) {
     editing,
     destroy() {
       offs.forEach((off) => off?.());
+      clearTimeout(readTimer);
+      readTimer = null;
       stopCurrentAudio();
     },
   };

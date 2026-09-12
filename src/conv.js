@@ -136,7 +136,20 @@ export function fileVisibleTo(fileId, userId) {
     )
     .get(userId, fileId);
   if (inConv) return file;
-  // 头像对所有登录用户可见
+  // 群头像：会话成员都该看得到。它不出现在任何 message 里，
+  // 所以上面那条查不到，漏掉这里的话除了上传者本人全是 404。
+  const asGroupAvatar = db
+    .prepare(
+      `SELECT 1
+         FROM conversations c
+         JOIN conversation_members cm
+           ON cm.conversation_id = c.id AND cm.user_id = ?
+        WHERE c.avatar_file_id = ?
+        LIMIT 1`,
+    )
+    .get(userId, fileId);
+  if (asGroupAvatar) return file;
+  // 个人头像对所有登录用户可见
   const asAvatar = db
     .prepare('SELECT 1 FROM users WHERE avatar_file_id = ? LIMIT 1')
     .get(fileId);

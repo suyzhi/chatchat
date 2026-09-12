@@ -202,7 +202,9 @@ export function openNewGroup(ctx) {
 /* ------------------------------------------------------------------ */
 
 export function openProfile(userId, ctx) {
-  const user = state.users.get(userId);
+  // state.users 里只有「别人」——app.js 装载用户目录时把 isSelf 那条跳过了，
+  // 而「我的资料」走的正是这个入口，所以自己要从 state.me 兜底取。
+  const user = userId === state.me?.id ? state.me : state.users.get(userId);
   if (!user) {
     toast('找不到这个用户', { tone: 'error' });
     return;

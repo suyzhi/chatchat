@@ -141,8 +141,16 @@ export function renderShell(root, handlers) {
 
   // 窄屏点列表项进入消息栏的逻辑在 list.js 里调 setMobilePane
 
-  bus.on('conversations:changed', () => api.setUnread(unreadTotal()));
-  bus.on('presence:changed', () => api.refreshMe());
+  const offs = [
+    bus.on('conversations:changed', () => api.setUnread(unreadTotal())),
+    bus.on('presence:changed', () => api.refreshMe()),
+  ];
 
-  return api;
+  return {
+    ...api,
+    /** 会话过期后重新登录会重建外壳，旧的总线订阅必须在这儿断掉 */
+    destroy() {
+      offs.forEach((off) => off?.());
+    },
+  };
 }

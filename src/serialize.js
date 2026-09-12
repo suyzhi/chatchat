@@ -139,7 +139,10 @@ export function messagesByIds(ids) {
  * @returns {{messages: object[], hasMore: boolean}}
  */
 export function listMessages(conversationId, { before, after, limit = 50 } = {}) {
-  const n = Math.max(1, Math.min(200, limit));
+  // 收口在这里：LIMIT 拿到非整数 SQLite 会直接抛 SQLITE_MISMATCH，
+  // 所以不管调用方传了什么，先落成一个 1..200 的整数。
+  const asked = Number(limit);
+  const n = Number.isFinite(asked) ? Math.max(1, Math.min(200, Math.trunc(asked))) : 50;
   let rows;
   if (after) {
     rows = db

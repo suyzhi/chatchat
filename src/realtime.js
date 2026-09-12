@@ -11,8 +11,18 @@ import { db, memberIds, isMember, now } from './db.js';
 import { userFromToken, readSessionToken } from './auth.js';
 import { addSocket, removeSocket, sendToUser, sendToUsers, onlineUserIds } from './presence.js';
 import { conversationSummary } from './conv.js';
+import { rateLimiter } from './util.js';
 
 const HEARTBEAT_MS = 30_000;
+
+/*
+ * 「正在输入」的限流。
+ *
+ * 客户端实际是走 WebSocket 发 typing 的（socket.js 的 sendTyping），
+ * HTTP 那条 /typing 只是另一条路径。所以这里也得限，两边用同一个额度，
+ * 否则一条 100 帧的循环就能给会话里每个人推 100 次重绘。
+ */
+const typingLimit = rateLimiter({ windowMs: 10_000, max: 40 });
 
 /** 把在线状态广播给所有人（用户量很小，全量广播最省事也最不容易错） */
 function broadcastPresence(userId, online) {
@@ -79,6 +89,7 @@ export function attachRealtime(server) {
           break;
 
         case 'typing': {
+          if (!typingLimit(String(ws.userId))) return;
           const cid = Number(msg.conversationId);
           if (!Number.isInteger(cid) || cid <= 0) return;
           // 每次 typing 事件都重新校验成员身份，不信任连接建立时的状态
@@ -105,6 +116,12 @@ export function attachRealtime(server) {
             )
             .get(cid, ws.userId)?.last_read_message_id;
           if (cur === undefined || mid <= cur) return;
+          // 和 HTTP 版一样钳位：只认这个会话里真实存在的消息 id，
+          // 否则别的会话（甚至还不存在）的 id 会把未读数直接算错。
+          const maxId = db
+            .prepare('SELECT COALESCE(MAX(id), 0) AS n FROM messages WHERE conversation_id = ?')
+            .get(cid).n;
+          if (mid > maxId) return;
           db.prepare(
             'UPDATE conversation_members SET last_read_message_id = ? WHERE conversation_id = ? AND user_id = ?',
           ).run(mid, cid, ws.userId);

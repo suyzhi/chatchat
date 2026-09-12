@@ -157,11 +157,33 @@ export function requireAuth(req, res, next) {
 
 const attempts = new Map(); // key -> {count, first, blockedUntil}
 const WINDOW_MS = 15 * 60_000;
+/** 同一个「来源 + 用户名」的容错次数 */
 const MAX_ATTEMPTS = 10;
+/** 同一个来源不区分用户名的容错次数。防止换着用户名刷，把 CPU 耗在 scrypt 上 */
+export const MAX_ATTEMPTS_PER_SOURCE = 30;
+/** 上限，防止有人用随机用户名把这张表撑爆 */
+const MAX_KEYS = 5000;
 
-export function throttleKey(req, username) {
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-  return `${ip}|${String(username || '').toLowerCase()}`;
+/**
+ * 限流用的「来源」标识。
+ *
+ * req.ip 在两种正确配置下都是不可伪造的：
+ *  - TRUST_PROXY=0（默认）：X-Forwarded-For 被忽略，req.ip 就是 TCP 对端地址；
+ *  - TRUST_PROXY=1 且在反代后面：反代会覆写 XFF，req.ip 是真实客户端地址。
+ * 真正危险的是「直接暴露 + TRUST_PROXY>0」—— 那时 req.ip 由客户端决定，
+ * 所以配置默认值选的是 0。见 config.js 里 trustProxy 的说明。
+ */
+export function clientKey(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+/** 两层桶：一层认人，一层认来源 */
+export function throttleKeys(req, username) {
+  const source = clientKey(req);
+  return {
+    user: `${source}|u:${String(username || '').toLowerCase()}`,
+    source: `${source}|*`,
+  };
 }
 
 export function isThrottled(key) {
@@ -177,25 +199,45 @@ export function isThrottled(key) {
   return 0;
 }
 
-export function noteFailure(key) {
+export function noteFailure(key, max = MAX_ATTEMPTS) {
   const t = now();
   let rec = attempts.get(key);
   if (!rec || t - rec.first > WINDOW_MS) {
+    // 表太大就先清掉已经过期的那批，避免随机用户名把它撑爆
+    if (!rec && attempts.size >= MAX_KEYS) sweepAttempts();
     rec = { count: 0, first: t, blockedUntil: 0 };
     attempts.set(key, rec);
   }
   rec.count += 1;
-  if (rec.count >= MAX_ATTEMPTS) {
+  if (rec.count >= max) {
     rec.blockedUntil = t + WINDOW_MS;
     rec.count = 0;
     rec.first = t;
   }
 }
 
+/** 清掉已经过期的记录。以前只有「再次访问同一个键」时才会删，等于永远不删。 */
+export function sweepAttempts() {
+  const t = now();
+  let removed = 0;
+  for (const [key, rec] of attempts) {
+    const expired = rec.blockedUntil ? rec.blockedUntil <= t : t - rec.first > WINDOW_MS;
+    if (expired) {
+      attempts.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 export const clearFailures = (key) => attempts.delete(key);
+
+const attemptsSweep = setInterval(sweepAttempts, 10 * 60_000);
+attemptsSweep.unref?.();
 
 /* 退出时清干净 */
 export function shutdownAuth() {
+  clearInterval(attemptsSweep);
   attempts.clear();
   closeDb();
 }

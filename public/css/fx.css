@@ -236,7 +236,6 @@ html[data-fx='on'] .fx-rail-tick {
 html[data-fx='on'] .fx-clock {
   display: flex;
   flex: none;
-  display: flex;
   align-items: center;
   gap: 0.4rem;
   padding-right: var(--s1);
@@ -1190,7 +1189,10 @@ html[data-fx='on'] .app {
   }
 }
 
-@media (max-width: 40rem), (max-height: 30rem) {
+/* 矮视口也必须「窄」，否则宽而扁的桌面窗口（比如 1400×470）会命中
+   这条 —— 那时应用还是三栏桌面布局，把电平条藏起来就没有道理了。
+   文件里其它几条高度条件都带着这个宽度前缀，就这条漏了。 */
+@media (max-width: 52rem), (max-width: 60rem) and (max-height: 30rem) {
   html[data-fx='on'] .fx-eq {
     display: none;
   }

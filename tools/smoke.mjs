@@ -9,7 +9,10 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 
-const BASE = process.argv[2] || process.env.SMOKE_BASE || 'http://127.0.0.1:8390';
+// 默认端口跟 src/config.js 的 PORT 默认值保持一致：npm start 起在 8787，
+// 以前这里写的是 8390，直接 npm run smoke 只会得到 ECONNREFUSED。
+const BASE =
+  process.argv[2] || process.env.SMOKE_BASE || `http://127.0.0.1:${process.env.PORT || 8787}`;
 
 let passed = 0;
 let failed = 0;
@@ -377,7 +380,7 @@ async function run() {
         }
       }),
     );
-    check('全部 %d 个分块上传完成', true, '');
+    check(`全部 ${totalChunks} 个分块上传完成`, true);
     void chunkSize;
 
     // 错误的块会被拒
@@ -753,6 +756,88 @@ async function run() {
       headers: { 'content-type': 'application/json' },
     });
     check('非法 JSON 返回 400', badJson.status === 400, `status=${badJson.status}`);
+  }
+
+  section('12. 回归项（曾经出过的问题）');
+  {
+    // 第 10 节把 bob 登出了，这里要用他先登回来
+    await bob.post('/api/auth/login', { username: `bob_${stamp}`, password: 'another-long-password' });
+
+    // 查询参数里的 limit 必须落成整数：LIMIT 2.5 会让 SQLite 抛
+    // SQLITE_MISMATCH，接口变成 500。
+    const dm = await alice.post('/api/conversations', { type: 'dm', userId: bobId });
+    const dmId = dm.data?.conversation?.id;
+    await alice.post(`/api/conversations/${dmId}/messages`, { kind: 'text', body: '回归测试' });
+    check('limit=2.5 不再 500', (await alice.get(`/api/conversations/${dmId}/messages?limit=2.5`)).status === 200);
+    check('limit=abc 回落到默认值', (await alice.get(`/api/conversations/${dmId}/messages?limit=abc`)).status === 200);
+    check('搜索 limit=10.5 不再 500',
+      (await alice.get('/api/messages/search?q=%E5%9B%9E%E5%BD%92&limit=10.5')).status === 200);
+
+    // intId 不接受 true / '0x10' 这类值（Number() 会把它们变成合法 id）
+    check('userId=true 被拒',
+      (await alice.post('/api/conversations', { type: 'dm', userId: true })).status === 400);
+    check('before=0x10 被拒',
+      (await alice.get(`/api/conversations/${dmId}/messages?before=0x10`)).status === 400);
+
+    // 已读位置钳位：乱填一个很大的 messageId 不能把未读算错
+    const msgs = await alice.get(`/api/conversations/${dmId}/messages`);
+    const maxMsgId = msgs.data?.messages?.at(-1)?.id ?? 0;
+    await bob.post(`/api/conversations/${dmId}/read`, { messageId: 99999999 });
+    const bobView = (await bob.get(`/api/conversations/${dmId}`)).data?.conversation;
+    check('已读位置被钳到本会话的消息区间', bobView?.lastReadMessageId === maxMsgId,
+      `lastRead=${bobView?.lastReadMessageId} max=${maxMsgId}`);
+
+    // 上传任务的大小必须是整数，否则任务永远完不成
+    check('上传 size=1.5 被拒',
+      (await alice.post('/api/uploads/init', { name: 'x.bin', size: 1.5 })).status === 400);
+    check('上传 size=true 被拒',
+      (await alice.post('/api/uploads/init', { name: 'x.bin', size: true })).status === 400);
+
+    // 并发 complete 只能落一份文件
+    const race = await alice.post('/api/uploads/init', { name: 'race.bin', size: 16, mime: 'application/octet-stream' });
+    await alice.req('PUT', `/api/uploads/${race.data.uploadId}/chunk/0`, {
+      raw: new Uint8Array(16),
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+    const both = await Promise.all([
+      alice.post(`/api/uploads/${race.data.uploadId}/complete`),
+      alice.post(`/api/uploads/${race.data.uploadId}/complete`),
+    ]);
+    const codes = both.map((r) => r.status).sort();
+    check('并发合并只成功一次', codes[0] === 201 && codes[1] === 409, JSON.stringify(codes));
+
+    // 群头像：不是消息附件，成员也必须能看
+    const gInit = await alice.post('/api/uploads/init', { name: 'group.png', size: 8, mime: 'image/png' });
+    await alice.req('PUT', `/api/uploads/${gInit.data.uploadId}/chunk/0`, {
+      raw: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+    const gFile = (await alice.post(`/api/uploads/${gInit.data.uploadId}/complete`)).data?.file;
+    await alice.patch(`/api/conversations/${groupId}`, { avatarFileId: gFile?.id });
+    // 第 7 节里 carol 已经退群、dave 被踢了，现在群里只剩 alice 和 bob
+    check('群成员能读到群头像', (await bob.get(`/api/files/${gFile?.id}`, { expectRaw: true })).status === 200);
+
+    // 后加入的成员不该替入群之前的历史背未读
+    const late = makeClient('late');
+    await late.post('/api/auth/register', {
+      username: `late_${stamp}`,
+      displayName: '后来的人',
+      password: 'sixth-long-password',
+      inviteCode,
+    });
+    const lateId = (await late.get('/api/auth/me')).data?.user?.id;
+    await alice.post(`/api/conversations/${groupId}/members`, { userIds: [lateId] });
+    const lateView = (await late.get(`/api/conversations/${groupId}`)).data?.conversation;
+    check('新成员进群没有历史未读', lateView?.unread === 0, `unread=${lateView?.unread}`);
+
+    // 群主退群之后要有人接手，否则这个群永久没人能管
+    await alice.post(`/api/conversations/${groupId}/leave`);
+    const afterLeave = (await bob.get(`/api/conversations/${groupId}`)).data?.conversation;
+    check('群主退群后群主自动转移',
+      (afterLeave?.members || []).some((m) => m.role === 'owner'),
+      JSON.stringify((afterLeave?.members || []).map((m) => m.role)));
+    check('接手的人真的能管理群聊',
+      (await bob.patch(`/api/conversations/${groupId}`, { title: '接手之后改的名' })).status === 200);
   }
 
   /* ------------------------------------------------------------------ */

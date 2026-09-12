@@ -46,6 +46,9 @@ function sanitizeMeta(meta) {
   if (!meta || typeof meta !== 'object') return null;
   const out = {};
   const num = (v, lo, hi) => {
+    // null / undefined / '' 是「没有这个值」，不是 0。Number(null) === 0，
+    // 不先挡掉的话，一个 null 宽度会被夹成 1，存进库里变成真实尺寸。
+    if (v === null || v === undefined || v === '') return null;
     const n = Number(v);
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : null;
   };
@@ -243,7 +246,9 @@ messagesRouter.get(
   wrap(async (req, res) => {
     const q = str(req.query.q ?? '', '关键词', { min: 1, max: 60 });
     const convFilter = req.query.conversationId ? intId(req.query.conversationId, '会话') : null;
-    const limit = Math.min(60, Math.max(1, Number(req.query.limit) || 30));
+    // 必须是整数：LIMIT 2.5 会让 SQLite 直接抛 SQLITE_MISMATCH，接口变成 500
+    const limit = Number.parseInt(req.query.limit ?? '', 10);
+    const take = Number.isSafeInteger(limit) ? Math.min(60, Math.max(1, limit)) : 30;
 
     // 只在当前用户所属的会话里搜
     const scope = db
@@ -273,7 +278,7 @@ messagesRouter.get(
           ORDER BY m.id DESC
           LIMIT ?`,
       )
-      .all(...ids, like, limit);
+      .all(...ids, like, take);
 
     res.json({
       results: rows.map((r) => ({

@@ -135,7 +135,7 @@ public/
 tools/
   build-icons.mjs    从 Phosphor 官方源生成图标模块
   check-imports.mjs  静态检查前端模块的 import / export 一致性
-  smoke.mjs          接口层端到端测试（163 项）
+  smoke.mjs          接口层端到端测试（176 项）
   browser-check.mjs  真浏览器端到端测试（70 项）
   screenshot.mjs     界面截图，用来肉眼检查排版
 ```

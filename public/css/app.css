@@ -268,6 +268,15 @@ audio {
   background: var(--accent-wash);
   color: var(--accent);
 }
+/*
+ * 消息栏头部的返回箭头只在手机布局里出现。
+ *
+ * 宽屏上会话列表就在左边一栏，那个箭头既没有用、又挤在标题前面
+ * （曾经它连一条样式规则都没有，于是在桌面上一直杵着）。
+ */
+.thread-back {
+  display: none;
+}
 .icon-btn--sm {
   width: 1.75rem;
   height: 1.75rem;
@@ -340,13 +349,23 @@ audio {
   font-size: var(--t-small);
   font-weight: 600;
   letter-spacing: 0;
-  overflow: hidden;
+  /*
+   * 这里不能 overflow: hidden。
+   *
+   * 圆角容器上的 overflow: hidden 会把子元素裁到**内圆**里，而在线状态点
+   * （.presence，right/bottom: -1px）正好压在那个圆的外侧 —— 36px 的头像上
+   * 只有大约四分之一的点能露出来，剩下的连同一圈白边一起被裁掉，
+   * 于是「在线」看起来永远是个残缺的小月牙。头像本身是正方形，
+   * 圆角交给 .avatar img 自己处理就够了。
+   */
+  overflow: visible;
   user-select: none;
 }
 .avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: var(--r-round);
 }
 .avatar--sm {
   width: 1.75rem;
@@ -460,12 +479,23 @@ audio {
   color: var(--ink-3);
   cursor: not-allowed;
 }
-.input--invalid,
-.textarea--invalid {
+/*
+ * 键盘聚焦时的外圈。
+ *
+ * 上面 .input:focus 给的是 3px 的 --accent-wash（#f2f4fe 压在白底上，
+ * 对比度大约 1.05:1），鼠标点进去好看，但键盘用户几乎看不出焦点在哪。
+ * :focus-visible 的优先级和 :focus 一样，靠写在后面赢，所以真正的
+ * 键盘焦点环由这里兜底 —— 和全局那条 --focus 是同一套。
+ */
+.input:focus-visible,
+.textarea:focus-visible {
+  box-shadow: var(--focus);
+  outline: none;
+}
+.input--invalid {
   border-color: var(--danger);
 }
-.input--invalid:focus,
-.textarea--invalid:focus {
+.input--invalid:focus {
   box-shadow: 0 0 0 3px var(--danger-wash);
 }
 
@@ -626,21 +656,10 @@ audio {
   font-size: var(--t-small);
   color: var(--ink-2);
 }
-.auth__banner {
-  display: flex;
-  gap: var(--s3);
-  padding: var(--s3) var(--s4);
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r);
-  font-size: var(--t-small);
-  color: var(--ink-2);
-  margin-bottom: var(--s5);
-}
-.auth__banner .ico {
-  color: var(--accent);
-  margin-top: 0.15em;
-}
+/*
+ * 登录页的错误条用的是通用 .banner.banner--error（见 views/auth.js），
+ * 这里原本还有一套 .auth__banner，界面上没有任何元素用到它，已删除。
+ */
 
 @media (max-width: 60rem) {
   .auth {
@@ -835,6 +854,11 @@ audio {
   background: var(--paper);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-wash);
+}
+/* 键盘焦点要有看得见的环：鼠标那圈的对比度只有 1.05:1，实测几乎等于没有。
+   这条必须写在 .searchbar input:focus 后面，两条的优先级一样高。 */
+.searchbar input:focus-visible {
+  box-shadow: var(--focus);
 }
 
 /* --------------------------------------------------------------------------
@@ -1033,16 +1057,6 @@ audio {
   background: var(--danger-wash);
   border: 1px solid #f0c9cb;
   color: var(--danger);
-}
-.banner--warn {
-  background: var(--warn-wash);
-  border: 1px solid var(--warn-line);
-  color: var(--warn-ink);
-}
-.banner--info {
-  background: var(--accent-wash);
-  border: 1px solid var(--accent-line);
-  color: var(--ink-2);
 }
 .banner__actions {
   margin-left: auto;
@@ -1414,7 +1428,10 @@ audio {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: var(--s3);
   align-items: center;
-  min-width: 15rem;
+  /* 15rem 是「文件名+大小+下载键」排得下的下限，但 320~360px 的窄屏上
+     气泡本身都没有 15rem 宽，写死就会把下载键顶出可视区（.thread 是
+     overflow-x: hidden，顶出去就再也够不着了）。所以下限也要跟着可用宽度走。 */
+  min-width: min(15rem, 100%);
   max-width: 26rem;
   padding: var(--s2) 0;
 }
@@ -1765,6 +1782,14 @@ audio {
   right: 0;
   width: 23rem;
   max-width: calc(100vw - 2rem);
+  /*
+   * 面板是往上长的，而 .app 是 height: 100dvh + overflow: hidden。
+   * 窗口一矮（横屏手机、把浏览器压扁），面板顶部连同那排分组标签
+   * 就会被 .app 裁掉，而且没有任何办法滚回去。留出输入区和头部的
+   * 高度，把上限交给它，剩下的让 .emoji__grid 自己滚。
+   */
+  max-height: calc(100vh - 7rem);
+  max-height: calc(100dvh - 7rem);
   background: var(--paper);
   border: 1px solid var(--line-2);
   border-radius: var(--r);
@@ -1803,6 +1828,12 @@ audio {
 }
 .emoji__grid {
   flex: 1;
+  /*
+   * 15rem 是「不占满整屏」的上限。这里必须同时把 min-height 归零：
+   * flex 项的默认 min-height 是 auto，面板被上面的 max-height 压矮时
+   * 网格不肯收缩，会把分组标签排顶出面板外面。
+   */
+  min-height: 0;
   max-height: 15rem;
   overflow-y: auto;
   padding: var(--s2);
@@ -1910,6 +1941,8 @@ audio {
 .dialog {
   width: 100%;
   max-width: 26rem;
+  /* dvh 不认的老引擎会把整条声明丢掉，必须先给一条 vh 的 */
+  max-height: calc(100vh - 2rem);
   max-height: calc(100dvh - 2rem);
   display: flex;
   flex-direction: column;
@@ -2102,7 +2135,9 @@ audio {
 .dropzone {
   position: fixed;
   inset: 0;
-  z-index: var(--z-toast);
+  /* 和 .toasts 同层的话，谁在后谁赢（index.html 里 #dropzone 在 #toasts 后面），
+     拖拽时那层蓝色蒙版加 2px 模糊会盖在提示条上。提示条优先级更高，让一层。 */
+  z-index: var(--z-overlay);
   display: grid;
   place-items: center;
   background: rgba(35, 64, 232, 0.06);
@@ -2306,6 +2341,10 @@ audio {
   }
   .pane--thread {
     position: relative;
+  }
+  /* 窄屏两栏互斥显示，这时候才需要「返回会话列表」这个箭头 */
+  .thread-back {
+    display: inline-flex;
   }
   .thread__inner {
     padding: 0 var(--s3);

@@ -43,9 +43,21 @@ export function optStr(value, label, opts = {}) {
   return str(value, label, opts);
 }
 
+/**
+ * 取一个正整数 id。
+ *
+ * 只认数字本身和纯十进制字符串（查询参数一律是字符串）。不用裸 Number()：
+ * 它会把 true 变成 1、把 '0x10' 变成 16、把 ['2'] 变成 2，这些都不该被
+ * 当成一个合法的 id —— 否则 `{"userId": true}` 就能悄悄变成「和 1 号私聊」。
+ */
 export function intId(value, label = '标识') {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) throw bad(`${label}无效`);
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
+  if (!Number.isSafeInteger(n) || n <= 0) throw bad(`${label}无效`);
   return n;
 }
 

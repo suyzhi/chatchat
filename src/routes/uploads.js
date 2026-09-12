@@ -61,6 +61,17 @@ async function receivedChunks(uploadId) {
 
 const uploadRow = (id) => db.prepare('SELECT * FROM uploads WHERE id = ?').get(id);
 
+/**
+ * 正在合并的上传任务。
+ *
+ * 合并是「先把所有分块拼成目标文件，最后才在事务里删掉 uploads 行」，
+ * 所以并发发两次 complete 会各写一份文件、各插一条 files 记录：同一份内容
+ * 在磁盘上占两份，files 表里也是两行，而配额和磁盘检查只在 init 时做过一次。
+ * 这是单进程应用（在线状态也是内存里的），用一张内存表挡住就足够准确，
+ * 又不用改动失败重试的语义。
+ */
+const merging = new Set();
+
 function mustOwnUpload(req) {
   const id = str(req.params.id, '上传', { max: 64 });
   const row = uploadRow(id);
@@ -81,8 +92,15 @@ uploadsRouter.post(
     }
 
     const name = sanitizeFilename(str(req.body?.name ?? 'file', '文件名', { max: 200 }));
-    const size = Number(req.body?.size);
-    if (!Number.isFinite(size) || size < 0) throw bad('文件大小无效');
+    // 直接用原值判定，不要先 Number()：Number(true) === 1、Number('1.5') === 1.5，
+    // 都能混过 isSafeInteger。JSON 里的数字本来就是 number 类型，不需要转换。
+    const size = req.body?.size;
+    /*
+     * 必须是正的安全整数。只判断 isFinite 的话，size=1.5 会一路建出一个
+     * 「总共 1 块、每块 1.5 字节」的任务：任何一块都传不进去（分块大小校验
+     * 永远对不上），complete 永远 409，任务和临时目录要挂到 24 小时后才被扫掉。
+     */
+    if (!Number.isSafeInteger(size) || size < 0) throw bad('文件大小无效');
     if (size === 0) throw bad('不能上传空文件');
     if (size > config.maxFileBytes) {
       throw bad(`文件超过上限 ${(config.maxFileBytes / 1024 / 1024).toFixed(0)} MB`);
@@ -182,90 +200,98 @@ uploadsRouter.post(
   wrap(async (req, res) => {
     const row = mustOwnUpload(req);
 
-    const have = await receivedChunks(row.id);
-    if (have.length !== row.total) {
-      const missing = [];
-      const set = new Set(have);
-      for (let i = 0; i < row.total; i += 1) if (!set.has(i)) missing.push(i);
-      return res.status(409).json({
-        error: '还有分块没传完',
-        code: 'incomplete',
-        missing: missing.slice(0, 512),
-        received: have.length,
-        total: row.total,
-      });
+    if (merging.has(row.id)) {
+      throw new HttpError(409, '这个上传正在合并，稍等一下再试', 'merging');
     }
+    merging.add(row.id);
+    try {
+      const have = await receivedChunks(row.id);
+      if (have.length !== row.total) {
+        const missing = [];
+        const set = new Set(have);
+        for (let i = 0; i < row.total; i += 1) if (!set.has(i)) missing.push(i);
+        return res.status(409).json({
+          error: '还有分块没传完',
+          code: 'incomplete',
+          missing: missing.slice(0, 512),
+          received: have.length,
+          total: row.total,
+        });
+      }
 
-    const fileId = newFileId();
-    const d = new Date();
-    const relDir = join(String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'));
-    const absDir = join(config.uploadDir, relDir);
-    await mkdir(absDir, { recursive: true });
+      const fileId = newFileId();
+      const d = new Date();
+      const relDir = join(String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'));
+      const absDir = join(config.uploadDir, relDir);
+      await mkdir(absDir, { recursive: true });
 
-    const ext = extOf(row.name);
-    const relPath = join(relDir, ext ? `${fileId}.${ext}` : fileId);
-    const absPath = join(config.uploadDir, relPath);
+      const ext = extOf(row.name);
+      const relPath = join(relDir, ext ? `${fileId}.${ext}` : fileId);
+      const absPath = join(config.uploadDir, relPath);
 
-    // 顺序拼接，边写边算 sha256，全程流式，内存恒定
-    const hash = createHash('sha256');
-    async function* chunks() {
-      for (let i = 0; i < row.total; i += 1) {
-        const stream = createReadStream(join(uploadDirOf(row.id), `${i}.part`));
-        for await (const c of stream) {
-          hash.update(c);
-          yield c;
+      // 顺序拼接，边写边算 sha256，全程流式，内存恒定
+      const hash = createHash('sha256');
+      async function* chunks() {
+        for (let i = 0; i < row.total; i += 1) {
+          const stream = createReadStream(join(uploadDirOf(row.id), `${i}.part`));
+          for await (const c of stream) {
+            hash.update(c);
+            yield c;
+          }
         }
       }
-    }
 
-    try {
-      await pipeline(chunks(), createWriteStream(absPath));
-    } catch (err) {
-      await rm(absPath, { force: true });
-      throw err;
-    }
-
-    const { size } = await stat(absPath);
-    if (size !== row.size) {
-      await rm(absPath, { force: true });
-      throw bad(`合并后的文件大小不符：期望 ${row.size}，实际 ${size}`);
-    }
-
-    // 图片尺寸由服务端嗅探，前端传的值不采信
-    let width = null;
-    let height = null;
-    if (row.kind === 'image') {
-      const dim = await imageSize(absPath);
-      if (dim) {
-        width = dim.width;
-        height = dim.height;
+      try {
+        await pipeline(chunks(), createWriteStream(absPath));
+      } catch (err) {
+        await rm(absPath, { force: true });
+        throw err;
       }
+
+      const { size } = await stat(absPath);
+      if (size !== row.size) {
+        await rm(absPath, { force: true });
+        throw bad(`合并后的文件大小不符：期望 ${row.size}，实际 ${size}`);
+      }
+
+      // 图片尺寸由服务端嗅探，前端传的值不采信
+      let width = null;
+      let height = null;
+      if (row.kind === 'image') {
+        const dim = await imageSize(absPath);
+        if (dim) {
+          width = dim.width;
+          height = dim.height;
+        }
+      }
+
+      const t = now();
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO files (id, owner_id, name, mime, size, sha256, kind, path, width, height, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          fileId,
+          req.user.id,
+          row.name,
+          row.mime,
+          size,
+          hash.digest('hex'),
+          row.kind,
+          relPath,
+          width,
+          height,
+          t,
+        );
+        db.prepare('DELETE FROM uploads WHERE id = ?').run(row.id);
+      })();
+
+      await rm(uploadDirOf(row.id), { recursive: true, force: true });
+
+      res.status(201).json({ file: publicFile(fileById(fileId)) });
+    } finally {
+      merging.delete(row.id);
     }
-
-    const t = now();
-    db.transaction(() => {
-      db.prepare(
-        `INSERT INTO files (id, owner_id, name, mime, size, sha256, kind, path, width, height, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        fileId,
-        req.user.id,
-        row.name,
-        row.mime,
-        size,
-        hash.digest('hex'),
-        row.kind,
-        relPath,
-        width,
-        height,
-        t,
-      );
-      db.prepare('DELETE FROM uploads WHERE id = ?').run(row.id);
-    })();
-
-    await rm(uploadDirOf(row.id), { recursive: true, force: true });
-
-    res.status(201).json({ file: publicFile(fileById(fileId)) });
   }),
 );
 
