@@ -47,6 +47,31 @@ else
   say "已生成 .env（SESSION_SECRET 是随机的，SITE_DOMAIN=${DOMAIN}）"
 fi
 
+# ---------------------------------------------------------------- 自签证书
+# 8443 那套配置（deploy/docker-compose.ip8443.yml + Caddyfile.ip8443）要求
+# /certs/ip.crt 和 /certs/ip.key 存在，但仓库里没有任何地方会生成它们 ——
+# 缺了的话 Caddy 会以 "open /certs/ip.crt: no such file or directory" 崩溃，
+# 在 restart: unless-stopped 下就是无限重启。这里顺手生成一份自签的。
+#
+# 主机名（也就是证书的 SAN）直接从 Caddyfile.ip8443 里读，保证和实际访问的一致。
+TLS_IP="$(sed -n 's|^https://\([0-9.]*\):8443.*|\1|p' deploy/Caddyfile.ip8443 2>/dev/null | head -n1)"
+if [ -n "$TLS_IP" ] && [ ! -f data/tls/ip.crt ]; then
+  if command -v openssl >/dev/null 2>&1; then
+    mkdir -p data/tls
+    if openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+        -keyout data/tls/ip.key -out data/tls/ip.crt \
+        -subj "/CN=${TLS_IP}" -addext "subjectAltName=IP:${TLS_IP}" >/dev/null 2>&1; then
+      say "已生成自签证书 data/tls/ip.{crt,key}（SAN=IP:${TLS_IP}，8443 模式要用）"
+    else
+      warn "自签证书生成失败，8443 模式会起不来。可以手工执行：
+       openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout data/tls/ip.key \\
+         -out data/tls/ip.crt -subj '/CN=${TLS_IP}' -addext 'subjectAltName=IP:${TLS_IP}'"
+    fi
+  else
+    warn "没有 openssl，跳过了自签证书。8443 模式需要 data/tls/ip.{crt,key}。"
+  fi
+fi
+
 # ---------------------------------------------------------------- 数据目录
 # 容器以 uid 1000 运行。宿主机上这个目录必须先归它，否则启动后会写不进数据库。
 mkdir -p data/uploads data/tmp

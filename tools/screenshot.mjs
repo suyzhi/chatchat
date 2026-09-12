@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
+import { WebSocket } from 'ws';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = resolve(process.argv[2] || join(ROOT, 'screenshots'));
@@ -125,14 +126,20 @@ async function seed(base) {
   const dm = await host('POST', '/api/conversations', { type: 'dm', userId: zhouId });
   const cid = dm.conversation.id;
 
-  const conv = async (who, body) => who('POST', `/api/conversations/${cid}/messages`, { kind: 'text', body });
+  // 目标会话显式传进来，并且检查服务端有没有报错 —— 以前这里写错过会话
+  // （把只有两个人的私聊当成了群），403 被静静吞掉，于是那一屏截图里
+  // 始终少一条消息，谁也没发现。
+  const conv = async (who, body, target = cid) => {
+    const res = await who('POST', `/api/conversations/${target}/messages`, { kind: 'text', body });
+    if (res?.error) throw new Error(`造数据失败（会话 ${target}）：${res.error}`);
+    return res;
+  };
 
   await conv(pal, '周末那个展你去不去');
   await conv(host, '去，几点的票');
   await conv(pal, '下午两点，我多买了一张');
   await conv(host, '那我请你吃饭\n展馆旁边有家面馆不错');
   await conv(pal, '成交');
-  await conv(mia, '我也想去');
   // 放一条长消息，检查换行与最大宽度
   await conv(host, '顺便说一下，新服务器已经搬好了，图片和语音都走分块上传，几个 G 的文件也不会断。之前那个方案传到一半就超时，现在没这个问题了。');
 
@@ -145,6 +152,7 @@ async function seed(base) {
   const gid = group.conversation.id;
   await pal('POST', `/api/conversations/${gid}/messages`, { kind: 'text', body: '两点在地铁口集合' });
   await mia('POST', `/api/conversations/${gid}/messages`, { kind: 'text', body: '收到' });
+  await conv(mia, '我也想去', gid);
 
   // 再开一个和米娅的私聊，让列表里有多个未读
   const dm2 = await host('POST', '/api/conversations', { type: 'dm', userId: miaId });

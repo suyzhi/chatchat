@@ -13,6 +13,11 @@ screenshots
 Dockerfile
 docker-compose.yml
 .dockerignore
+# SSH 私钥：deploy/update-vps.cmd 用的那把就在这个目录里，
+# 不排除的话每次 docker build 都会把它打进构建上下文。
+key-1o59pu0l
+*.pem
+*.ppk
 *.log
 *.md
 tools

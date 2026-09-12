@@ -12,12 +12,21 @@ const targets = [
   ['github releases', 'https://objects.githubusercontent.com'],
 ];
 
+let bad = 0;
 for (const [name, url] of targets) {
   const t = Date.now();
   try {
     const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(12000) });
     console.log(`  ok    ${name.padEnd(16)} ${res.status}  ${Date.now() - t}ms`);
   } catch (err) {
+    bad += 1;
     console.log(`  FAIL  ${name.padEnd(16)} ${err.message}`);
   }
 }
+
+// 用退出码表达结果，这样才能真的拿来卡构建/卡部署
+if (bad) {
+  console.log(`\n${bad} 个目标不通。`);
+  process.exit(1);
+}
+console.log('\n全部可达。');

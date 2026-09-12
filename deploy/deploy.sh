@@ -76,28 +76,40 @@ $COMPOSE up -d --build
 # --------------------------------------------------------------------------
 echo
 echo ">>> 等待健康检查通过"
+# 宿主端口是可配的（VELLUM_PORT，见 .env.example）。写死 8787 的话，
+# 改了端口就会误报「容器没通过健康检查」然后退出 1，其实应用好好的。
+VELLUM_PORT="$(sed -n 's/^VELLUM_PORT=//p' .env 2>/dev/null | tail -n1)"
+VELLUM_PORT="${VELLUM_PORT:-8787}"
 HEALTH=no
 for i in $(seq 1 40); do
-  if curl -fsS -m 3 http://127.0.0.1:8787/healthz >/dev/null 2>&1; then
+  if curl -fsS -m 3 "http://127.0.0.1:${VELLUM_PORT}/healthz" >/dev/null 2>&1; then
     HEALTH=yes
     break
   fi
   sleep 1
 done
-echo "本机 healthz: $HEALTH"
+echo "本机 healthz: $HEALTH（127.0.0.1:${VELLUM_PORT}）"
 
 echo
 echo ">>> 经 Caddy 访问（从服务器自己发起）"
+#
+# 必须用 --resolve 把域名指回 127.0.0.1，不能写成
+#   curl -k https://127.0.0.1:8443/... -H 'Host: <域名>'
+# —— 那样 TLS 握手里的 SNI 还是 127.0.0.1，Caddy 找不到匹配的站点，
+# 握手直接失败，这一整段自检会永远打印 000。看起来像站点挂了，其实好好的。
+SITE_HOST="$(sed -n 's/^SITE_DOMAIN=//p' .env 2>/dev/null | tail -n1)"
+SITE_HOST="${SITE_HOST:-chat.suyzhi.icu}"
 for path in /healthz / /css/fx.css /js/fx.js; do
-  code=$(curl -k -s -o /dev/null -w '%{http_code}' -m 8 "https://127.0.0.1:8443$path" \
-         -H 'Host: chat.suyzhi.icu' || echo 000)
+  code=$(curl -k -s -o /dev/null -w '%{http_code}' -m 8 \
+         --resolve "${SITE_HOST}:8443:127.0.0.1" \
+         "https://${SITE_HOST}:8443$path" || echo 000)
   echo "  $code  $path"
 done
 
 echo
 echo ">>> 从公网域名访问"
 for path in /healthz /css/fx.css /js/fx.js; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://chat.suyzhi.icu:8443$path" || echo 000)
+  code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "https://${SITE_HOST}:8443$path" || echo 000)
   echo "  $code  $path"
 done
 

@@ -11,6 +11,11 @@ data/
 .env
 .env.local
 
+# SSH 私钥（deploy/update-vps.cmd 用的那把）。绝对不要进版本库。
+key-*/
+*.pem
+*.ppk
+
 # 测试与截图产物
 screenshots/
 *.log

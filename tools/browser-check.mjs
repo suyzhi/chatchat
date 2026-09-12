@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
+import { WebSocket } from 'ws';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 

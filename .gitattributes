@@ -25,3 +25,9 @@
 Dockerfile text eol=lf
 *.caddyfile text eol=lf
 Caddyfile text eol=lf
+
+# Windows 批处理必须是 CRLF。上面那条 `* eol=lf` 会把它一起检出成 LF，
+# 而 cmd.exe 解析 LF 结尾的 .cmd 会错位：注释被当成命令执行、续行符 ^
+# 失效，脚本根本跑不起来 —— deploy/update-vps.cmd 就踩了这个坑。
+*.cmd text eol=crlf
+*.bat text eol=crlf

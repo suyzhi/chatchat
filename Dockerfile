@@ -28,16 +28,28 @@ WORKDIR /app
 # better-sqlite3 是原生模块。有预编译包时这几步用不上，没有时它们保证能编译出来。
 # 放在 builder 里，最终镜像不会背上编译器。
 #
-# 源不通时自动退回官方源：换源这件事本身不该成为构建失败的理由。
+# APT_MIRROR 必须真的写进源列表，否则这个构建参数只是一句日志：构建仍然去连
+# deb.debian.org，而需要换源的机器恰恰连不上它。源不通时再退回 DEBIAN_MIRROR。
+#
+# 这一段里不能写 # 注释：整条 RUN 是一个反斜杠续行的逻辑行，注释会把后面
+# 被续行接上来的语句一起吃掉。
 RUN set -eux; \
     apt_ok=0; \
     if [ -n "$APT_MIRROR" ]; then \
       echo "使用指定软件源: ${APT_MIRROR}"; \
+      if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+      fi; \
+      if [ -f /etc/apt/sources.list ]; then \
+        sed -i "s|deb.debian.org|${APT_MIRROR}|g; s|security.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list; \
+      fi; \
       if apt-get -o Acquire::Retries=2 update >/dev/null 2>&1 \
          && apt-get install -y --no-install-recommends python3 make g++ >/dev/null 2>&1; then \
         apt_ok=1; \
       else \
         echo "指定软件源不可用，退回 ${DEBIAN_MIRROR}" >&2; \
+        sed -i "s|${APT_MIRROR}|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+        sed -i "s|${APT_MIRROR}|${DEBIAN_MIRROR}|g" /etc/apt/sources.list 2>/dev/null || true; \
       fi; \
     fi; \
     if [ "$apt_ok" = "0" ]; then \

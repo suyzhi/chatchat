@@ -91,8 +91,14 @@ sudo systemctl restart docker
 
 ```bash
 # 在本地电脑执行，把当前目录传到服务器的 /opt/vellum
-scp -r ./* root@你的服务器IP:/opt/vellum/
+# 必须是 `.`（整个目录），不能写 `./*` —— 通配符不带隐藏文件，
+# .env.example / .dockerignore 传不过去，下一步 prepare.sh 会直接失败，
+# 而且失败时已经生成了一个空的 .env，重试还会被「.env 已存在」挡住。
+scp -r . root@你的服务器IP:/opt/vellum/
 ```
+
+传输前记得删掉本地的 `node_modules/` 和 `data/`（前者又大又没用，
+后者的数据库不该覆盖服务器上的）；`scp` 不会自动跳过它们。
 
 **方式二：走 Git**
 
@@ -211,7 +217,9 @@ bash deploy/backup.sh              # 数据库 + 上传的文件
 bash deploy/backup.sh --db-only    # 只备数据库（很小）
 ```
 
-数据库和文件包会打包到 `./backups`。
+数据库和文件包会打包到 `./backups`。数据库是 WAL 模式，所以归档出来的是
+`vellum-db-*.tar.gz`（里面是 `vellum.db`，必要时还有 `-wal`/`-shm`）；
+恢复时整个解压进 `data/` 覆盖即可，不要只挑 `vellum.db` 一个文件。
 
 **保留份数是按数据特性分的，别改错**：数据库只有几 MB，留 14 份；但上传的文件可能涨到几十 GB，留 14 份会把磁盘撑爆，所以文件包只留 3 份，而且超过可用磁盘 20% 时会直接跳过并警告。
 
