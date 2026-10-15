@@ -271,34 +271,42 @@ export async function uploadFile(file, opts = {}) {
     }
   }
 
+  /*
+   * 是不是用户主动取消。取消那一刻正在飞的分块请求会先以 DOMException
+   * AbortError 拒绝（putChunk 原样抛出），而不是 UploadCancelled，
+   * 所以三种情况都要认，否则服务端临时块和本地续传记录都清不掉。
+   */
+  const isCancelled = (err) =>
+    err instanceof UploadCancelled || err?.name === 'AbortError' || signal?.aborted;
+
+  let result;
   try {
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length || 1) }, worker));
+
+    throwIfAborted();
+    onPhase?.('merge');
+
+    try {
+      result = await api.uploadComplete(uploadId);
+    } catch (err) {
+      // 服务端说还缺块：补齐后再合并一次
+      if (err.status === 409 && Array.isArray(err.payload?.missing)) {
+        for (const index of err.payload.missing) {
+          await putChunk(index);
+        }
+        result = await api.uploadComplete(uploadId);
+      } else {
+        throw err;
+      }
+    }
   } catch (err) {
-    if (err instanceof UploadCancelled) {
-      // 主动取消：把服务端的临时块也清掉
+    if (isCancelled(err)) {
+      // 主动取消（包括合并阶段补块时取消）：把服务端的临时块也清掉
       api.uploadAbort(uploadId).catch(() => {});
       forgetUpload({ name, size: file.size, lastModified: file.lastModified });
     }
     // 其他错误保留 localStorage 记录，下次可以续传
     throw err;
-  }
-
-  throwIfAborted();
-  onPhase?.('merge');
-
-  let result;
-  try {
-    result = await api.uploadComplete(uploadId);
-  } catch (err) {
-    // 服务端说还缺块：补齐后再合并一次
-    if (err.status === 409 && Array.isArray(err.payload?.missing)) {
-      for (const index of err.payload.missing) {
-        await putChunk(index);
-      }
-      result = await api.uploadComplete(uploadId);
-    } else {
-      throw err;
-    }
   }
 
   forgetUpload({ name, size: file.size, lastModified: file.lastModified });
