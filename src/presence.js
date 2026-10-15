@@ -68,4 +68,7 @@ export function sendToUsers(userIds, payload) {
 /** 某个用户当前打开的标签页数量 */
 export const socketCount = (userId) => sockets.get(userId)?.size ?? 0;
 
+/** 某个用户当前的全部连接（拷贝一份，调用方遍历时关连接不会改到原集合） */
+export const socketsOf = (userId) => [...(sockets.get(userId) ?? [])];
+
 export const onlineSnapshot = () => onlineUserIds();

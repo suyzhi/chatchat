@@ -9,6 +9,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual, createHash } from 'no
 import { promisify } from 'node:util';
 import { config } from './config.js';
 import { db, now, userById, closeDb } from './db.js';
+import { socketsOf } from './presence.js';
 
 const scrypt = promisify(scryptCb);
 
@@ -81,6 +82,29 @@ export function userFromToken(token) {
     .get(hashToken(token), now());
   if (!row) return null;
   return userById(row.user_id) || null;
+}
+
+/*
+ * WebSocket 只在握手时校验过一次 token，删掉会话行之后已经连上的 socket
+ * 照样能收推送、还能用 ws 的 read 消息写已读位置，所以要主动关掉。
+ *
+ * 关闭码用 4001 而不是 4401：前端 socket.js 把 4401 当成「去登录页」，
+ * 其它码一律「带着当前 cookie 重连」。刚改完密码的那个标签页已经拿到了
+ * 新 cookie，重连就能接着用；真正被登出的标签页重连时会在握手阶段拿到
+ * 4401，再落到登录页。
+ */
+export const WS_SESSION_REVOKED = 4001;
+
+/** 关掉这个用户名下会话已经失效的连接。登出、登出所有设备、改密码之后调用 */
+export function closeRevokedSockets(userId) {
+  for (const ws of socketsOf(userId)) {
+    if (userFromToken(ws.sessionToken)) continue;
+    try {
+      ws.close(WS_SESSION_REVOKED, 'session revoked');
+    } catch {
+      ws.terminate();
+    }
+  }
 }
 
 /** 定期清掉过期会话，避免表无限增长 */

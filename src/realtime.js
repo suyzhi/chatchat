@@ -8,7 +8,7 @@
  */
 import { WebSocketServer } from 'ws';
 import { db, memberIds, isMember, now } from './db.js';
-import { userFromToken, readSessionToken } from './auth.js';
+import { userFromToken, readSessionToken, WS_SESSION_REVOKED } from './auth.js';
 import { addSocket, removeSocket, sendToUser, sendToUsers, onlineUserIds } from './presence.js';
 import { conversationSummary } from './conv.js';
 import { rateLimiter } from './util.js';
@@ -57,6 +57,8 @@ export function attachRealtime(server) {
     }
 
     ws.userId = user.id;
+    // 记下握手用的 token，之后每条消息和每次心跳都拿它复查会话还在不在
+    ws.sessionToken = token;
     ws.isAlive = true;
     const cameOnline = addSocket(user.id, ws);
 
@@ -75,6 +77,12 @@ export function attachRealtime(server) {
     });
 
     ws.on('message', (raw) => {
+      // 会话已经被删（登出 / 登出所有设备 / 改密码）或过期：不再处理，直接断开。
+      // 关闭码为什么是 4001 见 auth.js 里 WS_SESSION_REVOKED 的说明
+      if (!userFromToken(ws.sessionToken)) {
+        ws.close(WS_SESSION_REVOKED, 'session revoked');
+        return;
+      }
       let msg;
       try {
         msg = JSON.parse(raw.toString());
@@ -173,6 +181,11 @@ export function attachRealtime(server) {
     for (const ws of wss.clients) {
       if (ws.isAlive === false) {
         ws.terminate();
+        continue;
+      }
+      // 顺带复查会话：登出等路径会立刻关连接，这里兜底自然过期和漏掉的情况
+      if (ws.userId && !userFromToken(ws.sessionToken)) {
+        ws.close(WS_SESSION_REVOKED, 'session revoked');
         continue;
       }
       ws.isAlive = false;
