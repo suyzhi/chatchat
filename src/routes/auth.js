@@ -19,6 +19,7 @@ import {
   createSession,
   destroySession,
   destroyAllSessions,
+  closeRevokedSockets,
   sessionCookie,
   clearCookie,
   requireAuth,
@@ -165,6 +166,8 @@ authRouter.post(
 
 authRouter.post('/logout', (req, res) => {
   destroySession(req.sessionToken);
+  // 删掉会话行还不够，已经连上的 WebSocket 也要断开
+  if (req.user) closeRevokedSockets(req.user.id);
   res.setHeader('Set-Cookie', clearCookie());
   res.json({ ok: true });
 });
@@ -175,6 +178,7 @@ authRouter.post(
   requireAuth,
   wrap(async (req, res) => {
     destroyAllSessions(req.user.id);
+    closeRevokedSockets(req.user.id);
     res.setHeader('Set-Cookie', clearCookie());
     res.json({ ok: true });
   }),
@@ -236,6 +240,8 @@ authRouter.post(
     // 改密码后踢掉其他设备，但保留当前这台
     destroyAllSessions(req.user.id);
     const token = createSession(req.user.id, { userAgent: req.headers['user-agent'], ip: req.ip });
+    // 旧会话的连接全部断开（含当前这台）；当前这台带着新 cookie 重连就行
+    closeRevokedSockets(req.user.id);
     res.setHeader('Set-Cookie', sessionCookie(token, req));
     res.json({ ok: true, note: '其他设备已退出登录' });
   }),
