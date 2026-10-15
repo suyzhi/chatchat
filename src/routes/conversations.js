@@ -106,10 +106,14 @@ conversationsRouter.post(
         .run(conversation.id, req.user.id);
 
       if (created) {
-        sendToUsers([req.user.id, peerId], {
-          t: 'conversation:new',
-          conversation: { forUser: peerId, data: summary(conversation, peerId) },
-        });
+        // 摘要是按查看者算的（标题是对方的名字、可能带自己设的备注），
+        // 所以两个人各推各的那一份，不能把对方的视图也推给自己
+        for (const uid of [req.user.id, peerId]) {
+          sendToUsers([uid], {
+            t: 'conversation:new',
+            conversation: { forUser: uid, data: summary(conversation, uid) },
+          });
+        }
       }
       return res.status(created ? 201 : 200).json({
         conversation: summary(conversation, req.user.id),
