@@ -77,7 +77,6 @@ async function startServer() {
       PORT: String(port),
       HOST: '127.0.0.1',
       DATA_DIR: dataDir,
-      SESSION_SECRET: 'browser-check-secret',
       INVITE_CODE: '',
     },
     stdio: 'ignore',
