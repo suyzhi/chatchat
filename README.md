@@ -63,7 +63,7 @@ npm start
 
 打开 `http://127.0.0.1:8787`，注册第一个账号（自动成为管理员）。
 
-可选：把 `.env.example` 复制成 `.env` 改配置。不配也能跑，会话密钥会随机生成（代价是重启后需要重新登录）。
+可选：把 `.env.example` 复制成 `.env` 改配置。不配也能跑，全部用默认值。
 
 ```bash
 cp .env.example .env
@@ -144,12 +144,13 @@ tools/
 
 ## 配置
 
-全部环境变量和说明在 [`.env.example`](.env.example)。只有两个建议一定要设：
+全部环境变量和说明在 [`.env.example`](.env.example)。只有一个建议一定要设：
 
 ```bash
-SESSION_SECRET=$(openssl rand -hex 32)   # 不设的话重启会让所有人重新登录
 SITE_DOMAIN=chat.example.com            # 自动签发 HTTPS 证书要用
 ```
+
+以前这里还要求设 `SESSION_SECRET`，说不设的话重启会让所有人重新登录。其实它从来没被用到：登录状态是存在数据库里的随机 token，重启不会丢。老的 `.env` 里留着这一行也没关系，程序不读它。
 
 ---
 

@@ -5,7 +5,6 @@
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -81,12 +80,12 @@ export const config = {
   /** 消息可撤回的时间窗口（秒）。0 = 永久可撤回 */
   recallWindowSeconds: int(process.env.RECALL_SECONDS, 120),
 
-  /**
-   * 会话密钥。没配置就随机生成一个（进程重启后所有人需要重新登录，
-   * 生产环境请在 .env 里固定下来）。
+  /*
+   * 这里刻意没有「会话密钥」。会话是存在数据库里的随机 token（见 auth.js），
+   * cookie 里只有 token 本身，不需要签名，重启也不会丢。以前这里有一个
+   * SESSION_SECRET，从来没有任何地方用到它，只换来一句「重启后所有登录会
+   * 失效」的假警告。老的 .env 里留着这一行没关系：不读它，也不报错。
    */
-  secret: process.env.SESSION_SECRET || randomBytes(32).toString('hex'),
-  secretIsEphemeral: !process.env.SESSION_SECRET,
 
   /**
    * 反向代理后面要信任的跳数，用于拿真实 IP。
@@ -130,8 +129,5 @@ export function describeConfig() {
     `语音上限      ${config.maxVoiceSeconds} 秒`,
     `撤回窗口      ${config.recallWindowSeconds ? config.recallWindowSeconds + ' 秒' : '不限'}`,
   ];
-  if (config.secretIsEphemeral) {
-    lines.push('会话密钥      未设置（本次为随机值，重启后所有登录会失效，生产环境请设置 SESSION_SECRET）');
-  }
   return lines.join('\n  ');
 }

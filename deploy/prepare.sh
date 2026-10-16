@@ -3,7 +3,7 @@
 # Vellum 一键部署准备。
 #
 # 做四件事：
-#   1. 生成 .env（含一个随机的 SESSION_SECRET）
+#   1. 从 .env.example 生成 .env
 #   2. 问你要域名，写进 .env
 #   3. 建 data 目录，并把属主改成容器里那个 node 用户（uid 1000）
 #   4. 检查 Docker 在不在
@@ -36,6 +36,8 @@ else
   read -rp "你的域名（例如 chat.example.com）: " DOMAIN
   [ -n "$DOMAIN" ] || die "域名不能为空。没有域名就没法自动签发 HTTPS 证书。"
 
+  # SESSION_SECRET 已经不起作用（见 .env.example 末尾「已废弃」一节），
+  # 照旧给它填一个随机值，无害，也不影响后面的步骤
   SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
   # 从模板出发，只替换这两行，其余保持注释状态
@@ -44,7 +46,7 @@ else
       .env.example > .env
 
   chmod 600 .env
-  say "已生成 .env（SESSION_SECRET 是随机的，SITE_DOMAIN=${DOMAIN}）"
+  say "已生成 .env（SITE_DOMAIN=${DOMAIN}）"
 fi
 
 # ---------------------------------------------------------------- 自签证书

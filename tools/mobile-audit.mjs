@@ -88,7 +88,6 @@ async function startServer() {
       PORT: String(port),
       HOST: '127.0.0.1',
       DATA_DIR: dataDir,
-      SESSION_SECRET: 'mobile-audit-secret',
       INVITE_CODE: '',
     },
     stdio: 'ignore',

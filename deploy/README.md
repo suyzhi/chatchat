@@ -124,15 +124,13 @@ ls
 bash deploy/prepare.sh
 ```
 
-脚本会问你域名，然后自动生成 `.env`（包含一个随机的会话密钥）、建好 `data` 目录、设好权限。
+脚本会问你域名，然后自动生成 `.env`、建好 `data` 目录、设好权限。
 
 如果你想手动来，等价的操作是：
 
 ```bash
 cp .env.example .env
-# 生成一个密钥填进 SESSION_SECRET
-openssl rand -hex 32
-# 编辑 .env，至少填 SESSION_SECRET 和 SITE_DOMAIN
+# 编辑 .env，至少填 SITE_DOMAIN
 nano .env
 # 建数据目录并把属主改成容器里的 node 用户（uid 1000）
 mkdir -p data/uploads data/tmp
@@ -311,7 +309,11 @@ docker compose restart vellum
 
 **所有人突然都要重新登录**
 
-`SESSION_SECRET` 没设置。检查 `.env` 里这一行是不是空的。设好之后重启，以后就不会了。
+跟 `SESSION_SECRET` 无关，它从来没有起过作用（以前这里的说法是错的，填不填都一样）。登录状态存在数据库 `data/vellum.db` 里，cookie 里只有一个随机 token；重启、重建容器、升级都不会把人登出，前提是数据库还是原来那个。按这几条查：
+
+1. **数据库不是原来那个了。** 会话和账号、消息存在同一个库里。`data` 目录没有真正挂进容器（自己 `docker run` 时没加 `-v`、改过 `docker-compose.yml` 里的 `volumes`），或者换了个目录重新部署，用的就是一个新库，这时账号和消息也会一起不见。恢复了一份旧备份的话，备份之后才登录过的人都得重新登录。
+2. **登录到期了。** 有效期是 `.env` 里的 `SESSION_DAYS`（默认 30 天），从登录那一刻算起，天天在用也不会顺延。刚部署时大家差不多同一天注册，到期也就差不多是同一天。想长一点就调大它再 `docker compose up -d`；已经登录的会话还按登录时的值算，之后新登录的才按新值。
+3. **换了访问地址，或者 http / https 混用。** cookie 按主机名分开存：用 `https://域名` 登录过，再用 `http://IP:端口` 打开就是另一个站点，得重新登录。另外，带 Secure 标记的 cookie 浏览器只在 https 下保存和发送：`.env` 里写了 `COOKIE_SECURE=true` 却用 http 访问，登录看着成功了，cookie 却存不下来，一刷新又回到登录页。统一用 `https://域名` 访问，`COOKIE_SECURE` 保持注释掉（按请求协议自动判断）就行。
 
 **想让注册彻底关闭**
 

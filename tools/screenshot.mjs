@@ -44,7 +44,7 @@ async function startServer() {
   const port = 8700 + Math.floor(Math.random() * 200);
   const child = spawn(process.execPath, [join(ROOT, 'src', 'server.js')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir, SESSION_SECRET: 'shot' },
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_DIR: dataDir },
     stdio: 'ignore',
   });
   cleanup.push(async () => {
