@@ -559,6 +559,139 @@ async function main() {
   check('自己的消息显示送达/已读状态', afterSend.statusText.some((t) => /已送达|已读/.test(t)),
     JSON.stringify(afterSend.statusText));
 
+  /* ---------------- 草稿 ---------------- */
+
+  console.log('\n3b. 切会话、刷新页面都不丢草稿');
+  {
+    // 两行：顺带验证还原之后输入框按内容撑开，而不是缩成一行带滚动条
+    const draft = '写到一半的草稿\n切走再回来应该还在';
+    const openConv = (id) =>
+      evaluate(`document.querySelector('.listitem[data-conv-id="${id}"]').click()`);
+    const typeInto = (text) =>
+      evaluate(`(() => {
+        const ta = document.querySelector('.composer__input');
+        ta.focus();
+        ta.value = ${JSON.stringify(text)};
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      })()`);
+    const composerNow = () =>
+      evaluate(`(() => {
+        const ta = document.querySelector('.composer__input');
+        return {
+          value: ta.value,
+          title: document.querySelector('.pane--thread .pane__title')?.textContent,
+          sendDisabled: [...document.querySelectorAll('.composer__tools .icon-btn')].pop().disabled,
+          fits: ta.scrollHeight <= ta.clientHeight + 1,
+          bodies: [...document.querySelectorAll('.msg__body')].map(e => e.textContent),
+          stored: Object.keys(localStorage)
+            .filter(k => k.startsWith('vellum.drafts.'))
+            .map(k => localStorage.getItem(k))
+            .join(''),
+        };
+      })()`);
+
+    await typeInto(draft);
+    await openConv(seeded.groupId);
+    await sleep(1200);
+    const inGroup = await composerNow();
+    check('切到另一个会话，输入框里不是上一个会话的字',
+      inGroup.title === '界面测试群' && inGroup.value === '', JSON.stringify(inGroup.value));
+
+    await openConv(seeded.convId);
+    await sleep(800);
+    const back = await composerNow();
+    check('切回来，写了一半的话还在', back.value === draft, JSON.stringify(back.value));
+    check('还原草稿后发送按钮可用', back.sendDisabled === false);
+    check('多行草稿还原后输入框撑开了', back.fits);
+    check('草稿写进了 localStorage', back.stored.includes('切走再回来'), back.stored.slice(0, 120));
+
+    // 刷新页面：草稿要从 localStorage 里读回来（第一次打开时输入区还是隐藏的）
+    await S('Page.navigate', { url: BASE + '/' });
+    await sleep(2600);
+    await openConv(seeded.convId);
+    await sleep(1200);
+    const reloaded = await composerNow();
+    check('刷新页面后草稿还在', reloaded.value === draft, JSON.stringify(reloaded.value));
+    check('刷新后多行草稿也撑开了', reloaded.fits);
+
+    // 消息还没拉回来就切走：刚刷新、缓存是空的，点开私聊紧接着点群。
+    // 这个空档里草稿不能被当成「空输入框」存掉
+    await S('Page.navigate', { url: BASE + '/' });
+    await sleep(2600);
+    await evaluate(`(() => {
+      document.querySelector('.listitem[data-conv-id="${seeded.convId}"]').click();
+      document.querySelector('.listitem[data-conv-id="${seeded.groupId}"]').click();
+      return true;
+    })()`);
+    await sleep(1200);
+    await openConv(seeded.convId);
+    await sleep(1200);
+    const raced = await composerNow();
+    check('消息没加载完就切走，草稿也没被冲掉', raced.value === draft, JSON.stringify(raced.value));
+
+    // 发出去之后就不再是草稿
+    await evaluate(`[...document.querySelectorAll('.composer__tools .icon-btn')].pop().click()`);
+    await sleep(1500);
+    const sent = await composerNow();
+    check('草稿能直接发出去', sent.bodies.some((b) => b.includes('切走再回来')), JSON.stringify(sent.bodies));
+    check('发送后本地不再存着这份草稿', !sent.stored.includes('切走再回来'), sent.stored.slice(0, 120));
+    await openConv(seeded.groupId);
+    await sleep(800);
+    await openConv(seeded.convId);
+    await sleep(800);
+    const afterRoundTrip = await composerNow();
+    check('发送后再切回来，输入框是空的', afterRoundTrip.value === '', JSON.stringify(afterRoundTrip.value));
+
+    // 编辑旧消息时框里是那条消息的原文：不能记成草稿，退出编辑要把草稿还回来
+    const pending = '编辑旧消息之前写了一半';
+    const startEditLast = () =>
+      evaluate(`(async () => {
+        [...document.querySelectorAll('.msg--mine')].pop().querySelector('.msg__tools button').click();
+        await new Promise(r => setTimeout(r, 150));
+        [...document.querySelectorAll('.menu__item')].find(b => b.textContent.includes('编辑')).click();
+        return document.querySelector('.composer__input').value;
+      })()`);
+    await typeInto(pending);
+    const editBody = await startEditLast();
+    await sleep(700);
+    const editing = await composerNow();
+    check('进入编辑后输入框换成那条消息的原文', editing.value === editBody && editBody.includes('切走再回来'),
+      JSON.stringify(editing.value));
+    check('编辑中的原文没有被记成草稿', editing.stored.includes(pending) && !editing.stored.includes('切走再回来'),
+      editing.stored.slice(0, 120));
+    await openConv(seeded.groupId);
+    await sleep(800);
+    await openConv(seeded.convId);
+    await sleep(800);
+    const afterEditSwitch = await composerNow();
+    check('编辑到一半切走再回来，框里是草稿而不是原文', afterEditSwitch.value === pending,
+      JSON.stringify(afterEditSwitch.value));
+    await startEditLast();
+    await evaluate(`document.querySelector('.composer__input')
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    const afterEsc = await composerNow();
+    check('按 Esc 退出编辑，草稿回到输入框', afterEsc.value === pending, JSON.stringify(afterEsc.value));
+
+    // 会话过期：这台设备上的草稿整片清掉（不用真等过期，直接发那个事件）
+    await typeInto('会话过期前没发出去的话');
+    await sleep(700);
+    const beforeExpire = (await composerNow()).stored.includes('会话过期前');
+    await evaluate(`window.__vellum.bus.emit('auth:expired')`);
+    await sleep(600);
+    const leftover = await evaluate(
+      `Object.keys(localStorage).filter(k => k.startsWith('vellum.drafts.')).length`,
+    );
+    check('会话过期后本机草稿被清空', beforeExpire && leftover === 0,
+      `过期前已写盘=${beforeExpire}，剩 ${leftover} 份`);
+
+    // cookie 还有效，重新进应用、打开私聊，后面的小节接着用
+    await S('Page.navigate', { url: BASE + '/' });
+    await sleep(2600);
+    await openConv(seeded.convId);
+    await sleep(1200);
+  }
+
   /* ---------------- 表情面板 ---------------- */
 
   console.log('\n4. 表情面板');

@@ -5,7 +5,8 @@
  *  - Enter 发送，Shift + Enter 换行；
  *  - 选中的附件立刻开始上传，进度显示在输入框上方，全部就绪后发送；
  *  - 语音录完即刻发送，不经过待发送区（这是最符合直觉的行为）；
- *  - 支持粘贴图片、拖拽文件、点按钮选文件三条路径。
+ *  - 支持粘贴图片、拖拽文件、点按钮选文件三条路径；
+ *  - 没发出去的文字按会话存成草稿：切走再切回来还在，刷新页面也还在。
  */
 import { h, fill, toast, copyText } from '../dom.js';
 import { icon } from '../icon.js';
@@ -17,6 +18,53 @@ import { openMenu } from '../overlays.js';
 import { uploadFile, UploadCancelled, probeAudio } from '../upload.js';
 import { EMOJI_GROUPS, favoriteGroup, recentEmoji, noteEmoji } from '../emoji.js';
 import { Recorder, isSupported as recorderSupported } from '../recorder.js';
+
+/* ------------------------------------------------------------------ */
+/* 草稿的本地记录                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * 按用户分 key：同一台电脑换个账号登录，看不到上一个人没发出去的话。
+ * 只存文字。回复对象、编辑状态都跟着具体的消息走，切会话时照旧丢掉。
+ */
+const DRAFT_PREFIX = 'vellum.drafts.';
+/** 只留最近的若干条，早就不聊的会话的残稿不必一直堆着 */
+const DRAFT_LIMIT = 50;
+/** 写盘的防抖。每敲一个字都序列化一遍整份草稿没有必要 */
+const DRAFT_SAVE_DELAY = 400;
+
+function readDrafts(key) {
+  try {
+    const map = JSON.parse(localStorage.getItem(key) || '{}');
+    return map && typeof map === 'object' ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDrafts(key, map) {
+  try {
+    if (Object.keys(map).length) localStorage.setItem(key, JSON.stringify(map));
+    else localStorage.removeItem(key);
+  } catch {
+    /* 隐私模式下写不进去，降级成「只在这个标签页里记得」而已 */
+  }
+}
+
+/**
+ * 清掉这台设备上所有账号的草稿。登出和会话过期时调用：
+ * 别人接着用这台电脑时，不该翻得到上一个人写了一半的话。
+ */
+export function clearDrafts() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(DRAFT_PREFIX)) localStorage.removeItem(key);
+    }
+  } catch {
+    /* 同上 */
+  }
+}
 
 /**
  * @param {HTMLElement} host
@@ -68,6 +116,7 @@ export function createComposer(host, handlers) {
   input.addEventListener('input', () => {
     autoGrow();
     refreshSendState();
+    syncDraft();
     handlers.onTyping();
   });
 
@@ -100,6 +149,75 @@ export function createComposer(host, handlers) {
       insertAtCursor(text);
     }
   });
+
+  /* ------------------------------------------------------------------ */
+  /* 草稿                                                                */
+  /* ------------------------------------------------------------------ */
+
+  /*
+   * 输入区只有一个，会话却是切来切去的。以前一切会话 reset() 就把输入框
+   * 清空，打了一半的话直接没了。现在输入框里的字随时记成「当前会话的草稿」，
+   * 切走时存下，切回来由 restoreDraft 填回去。
+   */
+  const draftKey = `${DRAFT_PREFIX}${state.me?.id ?? 0}`;
+  /** @type {Map<number, {text: string, at: number}>} */
+  const drafts = new Map();
+  for (const [id, d] of Object.entries(readDrafts(draftKey))) {
+    if (typeof d?.text === 'string' && d.text.trim()) {
+      drafts.set(Number(id), { text: d.text, at: Number(d.at) || 0 });
+    }
+  }
+  /** 改过、还没写进 localStorage 的会话 */
+  const dirtyDrafts = new Set();
+  let draftTimer = null;
+  /**
+   * destroy() 之后不再记草稿。登出 / 会话过期时草稿刚被整片清掉，可还在路上的
+   * 请求（比如一条因 401 失败的发送）会在 catch 里把文字记回草稿，400ms 后
+   * 又写进 localStorage —— 等于把上一个人的话留给了下一个用这台电脑的人。
+   */
+  let destroyed = false;
+
+  function flushDrafts() {
+    clearTimeout(draftTimer);
+    draftTimer = null;
+    if (destroyed || dirtyDrafts.size === 0) return;
+    // 只动改过的那几条：同一个人可能开着两个标签页，整份覆盖会把另一边的草稿冲掉
+    const stored = readDrafts(draftKey);
+    for (const id of dirtyDrafts) {
+      const d = drafts.get(id);
+      if (d) stored[id] = d;
+      else delete stored[id];
+    }
+    dirtyDrafts.clear();
+    const kept = Object.entries(stored)
+      .sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0))
+      .slice(0, DRAFT_LIMIT);
+    writeDrafts(draftKey, Object.fromEntries(kept));
+  }
+
+  /** 记下某个会话的草稿；只有空白就当没有 */
+  function setDraft(convId, text) {
+    if (!convId || destroyed) return;
+    const prev = drafts.get(convId);
+    if (text.trim()) {
+      if (prev?.text === text) return;
+      drafts.set(convId, { text, at: Date.now() });
+    } else {
+      if (!prev) return;
+      drafts.delete(convId);
+    }
+    dirtyDrafts.add(convId);
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(flushDrafts, DRAFT_SAVE_DELAY);
+  }
+
+  /** 输入框里的字就是当前会话的草稿。编辑旧消息时框里是那条消息的原文，不算 */
+  function syncDraft() {
+    if (!editing.id) setDraft(handlers.getConversationId(), input.value);
+  }
+
+  // 防抖还没到点就刷新 / 关页面的话，最后几个字靠这里写进去
+  window.addEventListener('pagehide', flushDrafts);
 
   /* ------------------------------------------------------------------ */
   /* 待发送附件                                                          */
@@ -331,9 +449,11 @@ export function createComposer(host, handlers) {
   }
 
   function cancelEdit() {
+    const wasEditing = Boolean(editing.id);
     editing.id = null;
     editing.original = '';
-    input.value = '';
+    // 进编辑前输入框里写了一半的话还在草稿里（编辑期间不记草稿），退出编辑时还回去
+    input.value = wasEditing ? (drafts.get(handlers.getConversationId())?.text ?? '') : '';
     autoGrow();
     renderBanner();
     refreshSendState();
@@ -341,8 +461,10 @@ export function createComposer(host, handlers) {
   }
 
   function setReply(msg) {
+    // 正在编辑时点「回复」：先退出编辑、把草稿换回来。以前只是把 editing.id
+    // 置空，框里还是那条旧消息的原文，接着打字就成了一条新消息（现在还会被记成草稿）
+    if (editing.id) cancelEdit();
     reply.message = msg;
-    editing.id = null;
     renderBanner();
     input.focus();
   }
@@ -367,6 +489,8 @@ export function createComposer(host, handlers) {
     input.setSelectionRange(pos, pos);
     autoGrow();
     refreshSendState();
+    // 程序改的 value 不会触发 input 事件，草稿得自己记
+    syncDraft();
     input.focus();
   }
 
@@ -660,10 +784,13 @@ export function createComposer(host, handlers) {
         toast('消息不能为空', { tone: 'error' });
         return;
       }
+      const editId = editing.id;
       try {
-        const res = await api.editMessage(editing.id, text);
+        const res = await api.editMessage(editId, text);
         bus.emit('message:changed', res.message);
-        cancelEdit();
+        // await 期间切走了的话，reset() 已经退出了编辑，框里换成了那个会话的草稿，
+        // 这时再 cancelEdit 会把它清掉
+        if (editing.id === editId) cancelEdit();
       } catch (err) {
         toast(err.message, { tone: 'error' });
       }
@@ -680,6 +807,8 @@ export function createComposer(host, handlers) {
     input.value = '';
     autoGrow();
     refreshSendState();
+    // 草稿跟着输入框走：已经交出去了就不再是草稿。发送失败时下面会还回来
+    setDraft(convId, '');
 
     try {
       if (attachments.length === 0) {
@@ -708,11 +837,17 @@ export function createComposer(host, handlers) {
       handlers.onSent();
     } catch (err) {
       toast(err.message || '发送失败', { tone: 'error' });
-      // 失败就把文字还回输入框，别让人白打一遍
-      if (!input.value && text) {
-        input.value = text;
-        autoGrow();
-        refreshSendState();
+      // 失败就把文字还回去，别让人白打一遍。还给发起时的那个会话：
+      // await 期间用户可能已经切走了，那就放进它的草稿，切回去还在；
+      // 以前是塞进「当前」输入框，切走了就塞到别的会话里去了。
+      // 这期间那个会话里又写了新东西的话，不覆盖。
+      if (text && !drafts.has(convId)) {
+        setDraft(convId, text);
+        if (convId === handlers.getConversationId() && !editing.id && !input.value) {
+          input.value = text;
+          autoGrow();
+          refreshSendState();
+        }
       }
     }
   }
@@ -825,6 +960,8 @@ export function createComposer(host, handlers) {
 
   const offs = [
     bus.on('conversation:removed', (conversationId) => {
+      // 会话没了（退群、被移出、从列表移除），它的草稿也就不必留着了
+      setDraft(conversationId, '');
       // 只有当前会话没了才需要清草稿区；别的会话被移除不该动我这儿正在写的东西
       if (conversationId !== handlers.getConversationId()) return;
       clearPending(conversationId);
@@ -848,23 +985,50 @@ export function createComposer(host, handlers) {
     setReply,
     cancelReply,
     focus: () => input.focus(),
-    refresh: refreshSendState,
     /**
-     * 会话切换时重置草稿区。
-     *
-     * 只清「文字/回复/编辑」这些跟输入框绑定的东西。附件不清：它们各自
-     * 记着自己是哪个会话的，切走时只是不显示，切回来还在；正在传的也让它
-     * 继续传完。以前这里一律 clear()，结果是切一下会话，传到一半的大文件
-     * 就从界面上消失了，传完也没人接手（文件留在服务器上，消息永远发不出去）。
+     * 重新量输入框高度、刷新发送键。会话打开之后调一次：第一次打开会话时
+     * 输入区还是隐藏的，restoreDraft 那一刻量不出多行草稿该有多高。
      */
-    reset() {
-      cancelEdit();
-      cancelReply();
-      renderTray();
+    refresh() {
+      autoGrow();
       refreshSendState();
     },
+    /**
+     * 会话切换时重置草稿区。必须在 thread.open 之前调：这时「当前会话」还是
+     * 要离开的那个，输入框里的字正好存成它的草稿（编辑旧消息时框里是原文，不存）。
+     *
+     * 附件不清：它们各自记着自己是哪个会话的，切走时只是不显示，切回来还在；
+     * 正在传的也让它继续传完。以前这里一律 clear()，结果是切一下会话，传到
+     * 一半的大文件就从界面上消失了，传完也没人接手（文件留在服务器上，消息
+     * 永远发不出去）。
+     */
+    reset() {
+      syncDraft();
+      editing.id = null;
+      editing.original = '';
+      cancelReply();
+      input.value = '';
+      autoGrow();
+      renderTray();
+      refreshSendState();
+      input.focus();
+    },
+    /**
+     * 把某个会话的草稿填回输入框。紧跟在 thread.open 之后、不隔 await 调用：
+     * 要是等消息拉回来再填，这段时间里再切一次会话，reset() 会把空输入框
+     * 当成这个会话的草稿存下去，原来那份就被冲掉了。
+     */
+    restoreDraft(convId) {
+      input.value = drafts.get(convId)?.text ?? '';
+      autoGrow();
+      refreshSendState();
+    },
+    /** 只在登出 / 会话过期时调用，之后草稿会被整片清掉，所以这里不再写盘 */
     destroy() {
       offs.forEach((off) => off?.());
+      destroyed = true;
+      clearTimeout(draftTimer);
+      window.removeEventListener('pagehide', flushDrafts);
       cancelRecording();
       for (const entry of pending.values()) {
         try {

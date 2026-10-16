@@ -25,7 +25,7 @@ import { renderAuth } from './views/auth.js';
 import { renderShell } from './views/shell.js';
 import { createList } from './views/list.js';
 import { createThread } from './views/thread.js';
-import { createComposer } from './views/composer.js';
+import { createComposer, clearDrafts } from './views/composer.js';
 import {
   openNewChat,
   openNewGroup,
@@ -106,6 +106,7 @@ async function main() {
     // 会话失效：直接回登录页，并给出原因
     if (state.me) {
       teardown();
+      clearDrafts();
       reset();
       showAuth({ reason: '登录状态已过期，请重新登录' });
     }
@@ -211,7 +212,15 @@ async function bootApp() {
     onAddContact: () => openAddContact(),
     onJumpToMessage: (cid, mid) => {
       navigate('chats');
-      thread.jumpToMessage(cid, mid);
+      if (thread.activeId === cid) {
+        thread.jumpToMessage(cid, mid);
+        return;
+      }
+      // 跳进另一个会话也是切会话，输入框要照 openConversation 那样交接草稿，
+      // 不然上一个会话里写了一半的话会留在框里，算成这个会话的
+      composer.reset();
+      thread.jumpToMessage(cid, mid).then(() => composer?.refresh());
+      composer.restoreDraft(cid);
     },
   });
 
@@ -300,9 +309,16 @@ async function openConversation(id) {
   if (!conv) return;
   navigate('chats');
   shell.setMobilePane('thread');
+  // 输入框交接：旧会话的草稿在 reset() 里存下，新会话的由 restoreDraft() 填回。
+  // thread.open 的同步部分就已经把「当前会话」换掉了，所以 restoreDraft 紧跟
+  // 着调、不等消息拉回来（原因见 composer.restoreDraft）。
   composer.reset();
-  await thread.open(id);
-  composer.focus();
+  const opening = thread.open(id);
+  composer.restoreDraft(id);
+  await opening;
+  // 等的这段时间里可能已经登录过期、整套视图被拆掉了
+  composer?.refresh();
+  composer?.focus();
 }
 
 async function startChatWith(userId) {
@@ -365,6 +381,7 @@ const dialogCtx = {
       /* 服务端记不住也无所谓，本地状态照样清 */
     }
     teardown();
+    clearDrafts();
     reset();
     location.reload();
   },
@@ -382,6 +399,7 @@ function wireRealtime() {
 
   onBus('auth:expired', () => {
     teardown();
+    clearDrafts();
     reset();
     showAuth({ reason: '登录状态已过期，请重新登录' });
   });
